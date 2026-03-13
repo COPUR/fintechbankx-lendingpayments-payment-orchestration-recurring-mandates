@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+*.log
+logs/
+
+# Env/secrets
+.env
+.env.*
+!.env.example
+
+# Java/Gradle
+.gradle/
+build/
+out/
+*.class
+
+# Node
+node_modules/
+dist/
+coverage/
+
+# Python
+__pycache__/
+*.pyc
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+
+# OS temp
+*.tmp
+*.swp
