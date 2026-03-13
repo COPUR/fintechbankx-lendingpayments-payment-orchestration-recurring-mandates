@@ -1,0 +1,7 @@
+bounded_context: "payments"
+service_id: "svc-pay-recurring-mandates"
+application_id: "app.pay.recurring-mandates"
+data_owner_pattern: "db_pay_recurring_mandates_prod"
+event_namespace: "evt.pay.mandate"
+owning_squad: "Recurring and Bulk Payments Squad"
+wave: "3"
