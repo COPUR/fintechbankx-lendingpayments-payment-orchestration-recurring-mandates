@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - staging
+      - local
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Repository sanity
+        run: |
+          test -f README.md
+          echo "Repository baseline check passed"
+
+      - name: Secret hygiene quick check
+        run: |
+          if grep -R --line-number --exclude-dir=.git -E "(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|BEGIN (RSA|OPENSSH|PRIVATE) KEY)" .; then
+            echo "Potential secret pattern found"
+            exit 1
+          fi
+          echo "No obvious secret patterns found"
