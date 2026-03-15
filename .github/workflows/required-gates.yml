@@ -65,6 +65,18 @@ jobs:
             exit 1
           fi
 
+      - name: Build coverage trend report
+        shell: bash
+        run: node scripts/ci/coverage-trend.mjs
+
+      - name: Upload coverage trend artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-trend-${{ github.job }}-${{ github.run_id }}
+          path: |
+            build/reports/coverage/coverage-summary.json
+            build/reports/coverage/coverage-summary.md
+
       - name: OpenAPI contract lint
         if: ${{ hashFiles('api/openapi/*.yaml') != '' }}
         env:
