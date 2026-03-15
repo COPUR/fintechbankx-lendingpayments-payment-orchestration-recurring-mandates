@@ -1,0 +1,227 @@
+plugins {
+    id 'banking-domain-conventions'
+    id 'banking-testing-conventions'
+    id 'org.springframework.boot' apply false
+    id 'io.spring.dependency-management'
+}
+
+description = 'Open Finance Infrastructure - External adapters and infrastructure concerns'
+
+sourceSets {
+    main {
+        java {
+            setSrcDirs(['src/main/java'])
+            include 'com/enterprise/openfinance/consent/**'
+            include 'com/enterprise/openfinance/accountinformation/**'
+            include 'com/enterprise/openfinance/payeeverification/**'
+            include 'com/enterprise/openfinance/bankingmetadata/**'
+            include 'com/enterprise/openfinance/corporatetreasury/**'
+            include 'com/enterprise/openfinance/paymentinitiation/**'
+            include 'com/enterprise/openfinance/recurringpayments/**'
+            include 'com/enterprise/openfinance/bulkpayments/**'
+            include 'com/enterprise/openfinance/insurancedata/**'
+            include 'com/enterprise/openfinance/insurancequotes/**'
+            include 'com/enterprise/openfinance/fxservices/**'
+            include 'com/enterprise/openfinance/dynamiconboarding/**'
+            include 'com/enterprise/openfinance/requesttopay/**'
+            include 'com/enterprise/openfinance/productcatalog/**'
+            include 'com/enterprise/openfinance/atmdata/**'
+        }
+    }
+    test {
+        java {
+            setSrcDirs(['src/test/java'])
+            include 'com/enterprise/openfinance/consent/**'
+            include 'com/enterprise/openfinance/accountinformation/**'
+            include 'com/enterprise/openfinance/payeeverification/**'
+            include 'com/enterprise/openfinance/bankingmetadata/**'
+            include 'com/enterprise/openfinance/corporatetreasury/**'
+            include 'com/enterprise/openfinance/paymentinitiation/**'
+            include 'com/enterprise/openfinance/recurringpayments/**'
+            include 'com/enterprise/openfinance/bulkpayments/**'
+            include 'com/enterprise/openfinance/insurancedata/**'
+            include 'com/enterprise/openfinance/insurancequotes/**'
+            include 'com/enterprise/openfinance/fxservices/**'
+            include 'com/enterprise/openfinance/dynamiconboarding/**'
+            include 'com/enterprise/openfinance/requesttopay/**'
+            include 'com/enterprise/openfinance/productcatalog/**'
+            include 'com/enterprise/openfinance/atmdata/**'
+        }
+    }
+}
+
+dependencyManagement {
+    imports {
+        mavenBom 'org.springframework.boot:spring-boot-dependencies:3.3.6'
+    }
+}
+
+dependencies {
+    // Internal dependencies
+    api project(':open-finance-context:open-finance-application')
+    api project(':open-finance-context:open-finance-domain')
+    api project(':shared-kernel')
+    api project(':shared-infrastructure')
+    
+    // Spring Boot starters
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-cache'
+    
+    // FAPI 2.0 and OAuth 2.1 security
+    implementation libs.spring.security.oauth2.jose
+    implementation 'org.springframework.security:spring-security-oauth2-client'
+    implementation libs.nimbus.jose.jwt
+    implementation libs.oauth2.oidc.sdk
+    
+    // Database
+    implementation 'org.postgresql:postgresql'
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+    
+    // Kafka for event streaming
+    implementation 'org.springframework.kafka:spring-kafka'
+    
+    // Redis for caching and rate limiting
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation libs.lettuce.core
+    
+    // MongoDB for analytics silver copy
+    implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'
+    
+    // HTTP client for CBUAE integration
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'io.netty:netty-resolver-dns-native-macos:4.1.104.Final:osx-aarch_64'
+    
+    // JSON processing
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    
+    // Certificate management with Vault
+    implementation 'org.springframework.vault:spring-vault-core:3.1.3'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    
+    // Mapping
+    implementation libs.mapstruct
+    annotationProcessor libs.mapstruct.processor
+    
+    // OpenAPI documentation
+    implementation libs.springdoc.openapi.starter.webmvc.ui
+    implementation 'org.springdoc:springdoc-openapi-starter-common:2.3.0'
+    
+    // Lombok
+    compileOnly libs.lombok
+    annotationProcessor libs.lombok
+    
+    // Micrometer for metrics
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+    
+    // Testing - Additional dependencies not covered by convention plugins
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testImplementation 'org.testcontainers:mongodb:1.21.4'
+    testImplementation 'org.testcontainers:vault:1.21.4'
+    testImplementation 'org.testcontainers:nginx:1.21.4'
+    integrationTestImplementation 'org.springframework.boot:spring-boot-starter-web'
+    integrationTestImplementation 'org.springframework:spring-web'
+    functionalTestImplementation 'org.springframework.boot:spring-boot-starter-test'
+    functionalTestImplementation 'org.springframework.boot:spring-boot-starter-web'
+    functionalTestImplementation 'org.springframework:spring-web'
+}
+
+test {
+    useJUnitPlatform {
+        includeEngines 'junit-jupiter', 'jqwik'
+    }
+    systemProperty 'spring.profiles.active', 'test'
+    maxParallelForks = Runtime.runtime.availableProcessors().intdiv(2) ?: 1
+    
+    // JVM arguments for testing
+    jvmArgs = [
+        '-XX:+UseG1GC',
+        '-XX:MaxGCPauseMillis=100',
+        '-Xmx2G',
+        '-Xms1G'
+    ]
+    
+    // Test system properties
+    systemProperty 'testcontainers.reuse.enable', 'true'
+    systemProperty 'spring.jpa.hibernate.ddl-auto', 'validate'
+    systemProperty 'logging.level.org.testcontainers', 'INFO'
+    systemProperty 'logging.level.com.github.dockerjava', 'WARN'
+}
+
+// Configure test tasks created by banking conventions
+
+// Configure architecture testing (task created by banking-domain-conventions)
+architectureTest {
+    systemProperty 'archunit.freeze.store.default.path', 'build/archunit'
+    systemProperty 'spring.profiles.active', 'arch-test'
+}
+
+// Configure property-based testing (task created by banking-domain-conventions)
+propertyTest {
+    systemProperty 'jqwik.tries.default', '1000'
+    systemProperty 'jqwik.reporting.usejunitplatform', 'true'
+    systemProperty 'jqwik.shrinking.mode', 'BOUNDED'
+}
+
+// Configure integration testing (task created by banking-testing-conventions)
+integrationTest {
+    systemProperty 'spring.profiles.active', 'integration-test'
+    systemProperty 'testcontainers.reuse.enable', 'true'
+    
+    // Longer timeout for integration tests
+    timeout = Duration.ofMinutes(15)
+    
+    // Cleanup is handled by CI runner lifecycle; keep integration tests config-cache compatible.
+}
+
+// Configure functional testing (task created by banking-testing-conventions)
+functionalTest {
+    systemProperty 'spring.profiles.active', 'functional-test'
+}
+
+// Configure performance testing (task created by banking-testing-conventions) 
+performanceTest {
+    systemProperty 'spring.profiles.active', 'performance-test'
+    
+    // JVM tuning for performance tests
+    jvmArgs = [
+        '-XX:+UseG1GC',
+        '-XX:+PrintGC',
+        '-Xmx4G',
+        '-Xms2G'
+    ]
+}
+
+jacocoTestCoverageVerification {
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.85
+            }
+        }
+    }
+}
+
+// TestContainer cleanup task
+tasks.register('cleanupTestContainers') {
+    description = 'Clean up TestContainers resources'
+    doLast {
+        logger.lifecycle('Skipping docker prune in Gradle task to preserve configuration-cache compatibility.')
+    }
+}
+
+// Configure test execution order
+integrationTest.mustRunAfter test
+functionalTest.mustRunAfter integrationTest
+performanceTest.mustRunAfter functionalTest
