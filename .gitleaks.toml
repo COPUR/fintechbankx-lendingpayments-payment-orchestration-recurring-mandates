@@ -4,6 +4,12 @@ title = "FinTechBankX Gitleaks Baseline"
 useDefault = true
 
 [[allowlists]]
+description = "Ignore transient GitHub Actions checkout credentials in .git metadata"
+paths = [
+  '''\.git/.*'''
+]
+
+[[allowlists]]
 description = "Allow explicit documentation placeholder token"
 regexes = [
   '''tok_1234567890'''
