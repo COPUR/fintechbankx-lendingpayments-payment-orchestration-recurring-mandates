@@ -53,8 +53,17 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run tests
-        run: gradle --no-daemon test
+      - name: Run tests and coverage gates
+        run: gradle --no-daemon clean check
+
+      - name: Assert test execution produced reports
+        shell: bash
+        run: |
+          report_count="$(find . -path '*/build/test-results/test/*.xml' | wc -l | tr -d ' ')"
+          if [ "${report_count}" = "0" ]; then
+            echo "No JUnit XML reports were generated. Refusing no-op green builds."
+            exit 1
+          fi
 
       - name: OpenAPI contract lint
         if: ${{ hashFiles('api/openapi/*.yaml') != '' }}
@@ -83,11 +92,14 @@ jobs:
       - name: Guardrail - disallow generic map request payloads
         shell: bash
         run: |
-          if [ -d src/main/java ]; then
-            if grep -R -nE "Map<\s*String\s*,\s*Object\s*>" src/main/java --include="*Controller.java"; then
-              echo "Generic Map<String,Object> payloads are disallowed in controllers."
-              exit 1
-            fi
+          files="$(find . -path '*/src/main/java/*Controller.java')"
+          if [ -z "$files" ]; then
+            echo "No Java controller sources in this repository; guardrail check skipped."
+            exit 0
+          fi
+          if grep -R -nE "Map<\s*String\s*,\s*Object\s*>" $files; then
+            echo "Generic Map<String,Object> payloads are disallowed in controllers."
+            exit 1
           fi
 
   security:

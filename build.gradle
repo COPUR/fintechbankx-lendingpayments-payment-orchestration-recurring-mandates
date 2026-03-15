@@ -1,13 +1,40 @@
 plugins {
     id 'java-library'
+    id 'io.spring.dependency-management' version '1.1.7' apply false
 }
 
-description = 'Wave 3 bounded context parent module'
+description = 'Recurring mandates bounded context parent module'
 
-repositories {
-    mavenCentral()
+allprojects {
+    group = 'com.fintechbankx'
+    version = '1.0.0'
+
+    repositories {
+        mavenCentral()
+    }
 }
 
-tasks.withType(Test).configureEach {
-    useJUnitPlatform()
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'io.spring.dependency-management'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(23)
+        }
+    }
+
+    dependencyManagement {
+        imports {
+            mavenBom 'org.springframework.boot:spring-boot-dependencies:3.3.6'
+        }
+    }
+
+    dependencies {
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    tasks.withType(Test).configureEach {
+        useJUnitPlatform()
+    }
 }
