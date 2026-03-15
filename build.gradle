@@ -1,0 +1,13 @@
+plugins {
+    id 'java-library'
+}
+
+description = 'Wave 3 bounded context parent module'
+
+repositories {
+    mavenCentral()
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+}

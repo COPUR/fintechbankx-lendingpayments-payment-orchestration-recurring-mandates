@@ -1,0 +1,13 @@
+title = "FinTechBankX Gitleaks Baseline"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Allow explicit documentation placeholder token"
+regexes = [
+  '''tok_1234567890'''
+]
+paths = [
+  '''README\.md'''
+]
