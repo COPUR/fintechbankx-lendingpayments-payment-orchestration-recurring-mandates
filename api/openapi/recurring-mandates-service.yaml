@@ -1,0 +1,183 @@
+openapi: 3.0.3
+info:
+  title: Recurring Mandates Service API
+  version: 0.1.0
+  description: API for variable recurring payment mandate lifecycle and execution.
+servers:
+  - url: https://api.example.com/open-finance/v1
+paths:
+  /payment-consents:
+    post:
+      summary: Create recurring mandate consent
+      operationId: createRecurringConsent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/JwsSignature'
+        - $ref: '#/components/parameters/Dpop'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConsentRequest'
+      responses:
+        '201':
+          description: Consent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentResponse'
+  /payment-consents/{consentId}:
+    get:
+      summary: Get recurring mandate consent status
+      operationId: getRecurringConsent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+        - name: consentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Consent status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConsentResponse'
+  /payments:
+    post:
+      summary: Execute recurring payment under mandate
+      operationId: executeRecurringPayment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/JwsSignature'
+        - $ref: '#/components/parameters/Dpop'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutePaymentRequest'
+      responses:
+        '201':
+          description: Payment accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+  /payments/{paymentId}:
+    get:
+      summary: Get recurring payment status
+      operationId: getRecurringPayment
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+        - name: paymentId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    InteractionId:
+      name: x-fapi-interaction-id
+      in: header
+      required: true
+      schema:
+        type: string
+    IdempotencyKey:
+      name: x-idempotency-key
+      in: header
+      required: true
+      schema:
+        type: string
+    JwsSignature:
+      name: x-jws-signature
+      in: header
+      required: true
+      schema:
+        type: string
+    Dpop:
+      name: DPoP
+      in: header
+      required: true
+      schema:
+        type: string
+  schemas:
+    CreateConsentRequest:
+      type: object
+      required: [Data]
+      properties:
+        Data:
+          type: object
+          required: [MaximumIndividualAmount, PeriodType, ExpirationDateTime]
+          properties:
+            MaximumIndividualAmount:
+              type: string
+            Currency:
+              type: string
+            PeriodType:
+              type: string
+            ExpirationDateTime:
+              type: string
+              format: date-time
+    ExecutePaymentRequest:
+      type: object
+      required: [Data]
+      properties:
+        Data:
+          type: object
+          required: [ConsentId, InstructedAmount]
+          properties:
+            ConsentId:
+              type: string
+            InstructedAmount:
+              type: object
+              required: [Amount, Currency]
+              properties:
+                Amount:
+                  type: string
+                Currency:
+                  type: string
+    ConsentResponse:
+      type: object
+      properties:
+        Data:
+          type: object
+          properties:
+            ConsentId:
+              type: string
+            Status:
+              type: string
+    PaymentResponse:
+      type: object
+      properties:
+        Data:
+          type: object
+          properties:
+            PaymentId:
+              type: string
+            Status:
+              type: string
