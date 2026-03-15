@@ -1,1 +1,5 @@
 rootProject.name = 'fintechbankx-payments-recurring-mandates-service'
+
+include 'open-finance-domain'
+include 'open-finance-application'
+include 'open-finance-infrastructure'
