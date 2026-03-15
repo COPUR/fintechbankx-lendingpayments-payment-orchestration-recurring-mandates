@@ -1,0 +1,144 @@
+plugins {
+    id 'java-library'
+    id 'jacoco'
+    id 'org.springframework.boot' apply false
+    id 'io.spring.dependency-management'
+}
+
+description = 'Open Finance Domain - Core business logic for Open Finance integration'
+
+sourceSets {
+    main {
+        java {
+            setSrcDirs(['src/main/java'])
+            include 'com/enterprise/openfinance/consent/**'
+            include 'com/enterprise/openfinance/accountinformation/**'
+            include 'com/enterprise/openfinance/payeeverification/**'
+            include 'com/enterprise/openfinance/bankingmetadata/**'
+            include 'com/enterprise/openfinance/corporatetreasury/**'
+            include 'com/enterprise/openfinance/paymentinitiation/**'
+            include 'com/enterprise/openfinance/recurringpayments/**'
+            include 'com/enterprise/openfinance/bulkpayments/**'
+            include 'com/enterprise/openfinance/insurancedata/**'
+            include 'com/enterprise/openfinance/insurancequotes/**'
+            include 'com/enterprise/openfinance/fxservices/**'
+            include 'com/enterprise/openfinance/dynamiconboarding/**'
+            include 'com/enterprise/openfinance/requesttopay/**'
+            include 'com/enterprise/openfinance/productcatalog/**'
+            include 'com/enterprise/openfinance/atmdata/**'
+        }
+    }
+    test {
+        java {
+            setSrcDirs(['src/test/java'])
+            include 'com/enterprise/openfinance/consent/**'
+            include 'com/enterprise/openfinance/accountinformation/**'
+            include 'com/enterprise/openfinance/payeeverification/**'
+            include 'com/enterprise/openfinance/bankingmetadata/**'
+            include 'com/enterprise/openfinance/corporatetreasury/**'
+            include 'com/enterprise/openfinance/paymentinitiation/**'
+            include 'com/enterprise/openfinance/recurringpayments/**'
+            include 'com/enterprise/openfinance/bulkpayments/**'
+            include 'com/enterprise/openfinance/insurancedata/**'
+            include 'com/enterprise/openfinance/insurancequotes/**'
+            include 'com/enterprise/openfinance/fxservices/**'
+            include 'com/enterprise/openfinance/dynamiconboarding/**'
+            include 'com/enterprise/openfinance/requesttopay/**'
+            include 'com/enterprise/openfinance/productcatalog/**'
+            include 'com/enterprise/openfinance/atmdata/**'
+        }
+    }
+}
+
+dependencies {
+    // Domain model dependencies
+    api project(':common:common-domain')
+    
+    // Domain event support
+    api 'org.springframework:spring-context:6.1.0'
+    api 'org.springframework:spring-tx:6.1.0'
+    
+    // Value object support
+    compileOnly libs.lombok
+    annotationProcessor libs.lombok
+    
+    // Validation
+    api 'jakarta.validation:jakarta.validation-api:3.1.1'
+    implementation libs.hibernate.validator
+    
+    // Jackson for JSON serialization
+    api libs.jackson.annotations
+    implementation libs.jackson.databind
+    implementation libs.jackson.datatype.jsr310
+    
+    // Testing
+    testImplementation project(':common:common-test')
+    testImplementation libs.junit.jupiter
+    testImplementation libs.assertj.core
+    testImplementation libs.mockito.junit.jupiter
+    testImplementation libs.archunit.junit5
+    testImplementation libs.jqwik
+}
+
+test {
+    useJUnitPlatform {
+        includeEngines 'junit-jupiter', 'jqwik'
+    }
+}
+
+jacoco {
+    toolVersion = '0.8.14'
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+    classDirectories.setFrom(files(classDirectories.files.collect { dir ->
+        fileTree(
+                dir: dir,
+                include: [
+                        'com/enterprise/openfinance/consent/**',
+                        'com/enterprise/openfinance/accountinformation/**',
+                        'com/enterprise/openfinance/payeeverification/**',
+                        'com/enterprise/openfinance/bankingmetadata/**',
+                        'com/enterprise/openfinance/corporatetreasury/**',
+                        'com/enterprise/openfinance/paymentinitiation/**',
+                        'com/enterprise/openfinance/recurringpayments/**',
+                        'com/enterprise/openfinance/bulkpayments/**',
+                        'com/enterprise/openfinance/insurancedata/**',
+                        'com/enterprise/openfinance/insurancequotes/**',
+                        'com/enterprise/openfinance/fxservices/**',
+                        'com/enterprise/openfinance/dynamiconboarding/**',
+                        'com/enterprise/openfinance/requesttopay/**',
+                        'com/enterprise/openfinance/productcatalog/**',
+                        'com/enterprise/openfinance/atmdata/**'
+                ]
+        )
+    }))
+}
+
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.85
+            }
+        }
+    }
+}
+
+// Enforce architectural rules
+tasks.register('archTest', Test) {
+    useJUnitPlatform {
+        includeTags 'architecture'
+    }
+}
+
+check.dependsOn archTest
+check.dependsOn jacocoTestCoverageVerification
