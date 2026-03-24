@@ -2,8 +2,8 @@
 
 ## Repository
 
-- Name: \
-- Last Updated: \
+- Name: fintechbankx-lendingpayments-payment-orchestration-recurring-mandates
+- Last Updated: 2026-03-24
 
 ## Completed
 
@@ -19,7 +19,7 @@
 ## Next
 
 1. Execute at least one controlled degradation drill.
-2. Capture evidence artifacts under \.
+2. Capture evidence artifacts under docs/operations/evidence/.
 3. Wire required CI checks for cell controls and contract conformance.
 4. Publish closure note and readiness status.
 
