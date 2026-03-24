@@ -1,0 +1,73 @@
+name: Strict mTLS Enforcement
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+      - staging
+
+jobs:
+  strict-mtls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run repo-provided strict mTLS validator (if available)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f package.json ]; then
+            npm ci
+            if node -e "const fs=require('fs');const p=require('./package.json');process.exit(p.scripts&&p.scripts['validate:strict-mtls']?0:1)"; then
+              npm run validate:strict-mtls
+            else
+              echo "No validate:strict-mtls script; continuing with baseline checks."
+            fi
+          else
+            echo "No package.json; continuing with baseline checks."
+          fi
+
+      - name: Enforce strict mTLS baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY##*/}"
+          SEARCH_PATHS=()
+          for path in k8s security scripts; do
+            if [ -d "$path" ]; then
+              SEARCH_PATHS+=("$path")
+            fi
+          done
+
+          if [ ${#SEARCH_PATHS[@]} -eq 0 ]; then
+            echo "No mesh policy directories present; strict mTLS baseline marked N/A."
+            exit 0
+          fi
+
+          # 1) Never allow PERMISSIVE in tracked manifest policies.
+          if grep -R -nE "mode:[[:space:]]*PERMISSIVE" "${SEARCH_PATHS[@]}" --include='*.yaml' --include='*.yml' >/dev/null 2>&1; then
+            echo "PERMISSIVE mTLS detected in tracked manifest files."
+            exit 1
+          fi
+
+          # 2) Critical Wave-0 platform repos must evidence STRICT mode in source artifacts.
+          case "$REPO" in
+            fintechbankx-platform-service-mesh-security|fintechbankx-platform-identity-keycloak-ldap)
+              if ! grep -R -nE "mode:[[:space:]]*STRICT|PeerAuthentication" "${SEARCH_PATHS[@]}" --include='*.yaml' --include='*.yml' --include='*.sh' >/dev/null 2>&1; then
+                echo "STRICT mTLS evidence not found for critical platform repo: $REPO"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "STRICT mTLS hard requirement is N/A for $REPO; baseline PERMISSIVE guard applied."
+              ;;
+          esac

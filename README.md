@@ -60,3 +60,19 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 ## Katkı
 - Katkı süreci için `CONTRIBUTING.md` ve squad runbook'ları izlenmelidir.
 - PR'larda mimari kararlar ADR veya backlog referansı ile ilişkilendirilmelidir.
+
+## Cell-Based Architecture
+
+This repository participates in the FinTechBankX cell-based resilience program.
+
+- Plan: \
+- Backlog: \
+
+<!-- cell-architecture-start -->
+## Cell-Based Architecture
+
+This repository participates in the FinTechBankX cell-based resilience program.
+
+- Plan: docs/architecture/CELL_BASED_ARCHITECTURE_IMPLEMENTATION_PLAN.md
+- Backlog: docs/project-management/CELL_ARCHITECTURE_BACKLOG_BOARD.md
+<!-- cell-architecture-end -->

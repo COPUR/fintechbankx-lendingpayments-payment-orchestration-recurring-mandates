@@ -1,0 +1,72 @@
+name: publication-guardrails
+
+on:
+  pull_request:
+  push:
+    branches: ["main", "dev", "staging"]
+
+jobs:
+  local-path-leak-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Detect local path or identity leakage
+        run: |
+          set -euo pipefail
+          if rg -n "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**'; then
+            echo "Local path / identity leakage detected"
+            exit 1
+          fi
+
+  secret-pattern-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Scan secret-like patterns
+        run: |
+          set -euo pipefail
+          PATTERN='BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key|password\\s*[:=]'
+          if rg -n "$PATTERN" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**'; then
+            echo "Potential secret pattern detected"
+            exit 1
+          fi
+
+  readme-doc-link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Validate README local links
+        run: |
+          set -euo pipefail
+          node <<'JS'
+          const fs = require('fs');
+          const path = require('path');
+          const files = [];
+          const walk = (d) => {
+            for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+              if (['.git','node_modules','build','.gradle'].includes(e.name)) continue;
+              const p = path.join(d, e.name);
+              if (e.isDirectory()) walk(p);
+              else if (e.name.toLowerCase() === 'readme.md') files.push(p);
+            }
+          };
+          walk('.');
+          let bad = 0;
+          for (const file of files) {
+            const txt = fs.readFileSync(file, 'utf8');
+            for (const m of txt.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+              const link = m[1];
+              const p = link.split('#')[0];
+              if (!p || /^https?:\/\//.test(p) || /^mailto:/.test(p) || p.startsWith('#')) continue;
+              const target = path.resolve(path.dirname(file), p);
+              if (!fs.existsSync(target)) {
+                console.error(file + ': missing link target -> ' + link);
+                bad++;
+              }
+            }
+          }
+          if (bad > 0) process.exit(1);
+          JS
