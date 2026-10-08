@@ -4,8 +4,8 @@ import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpCons
 import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
-import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
 import com.enterprise.openfinance.recurringpayments.domain.model.DebtorAccount;
 import com.enterprise.openfinance.recurringpayments.domain.model.MandateChange;
@@ -187,11 +187,13 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             return cached;
         }
 
-        Optional<VrpPayment> loaded = paymentPort.findById(query.paymentId())
-                .map(payment -> validatePaymentAccess(payment, query.tppId()));
+        // Unknown and another TPP's payment get the same PaymentNotAccessibleException (one 403).
+        VrpPayment loaded = validatePaymentAccess(paymentPort.findById(query.paymentId())
+                .orElseThrow(() -> new PaymentNotAccessibleException(PaymentNotAccessibleException.Reason.NOT_FOUND)),
+                query.tppId());
 
-        loaded.ifPresent(payment -> cachePort.putPayment(cacheKey, payment, now.plus(settings.cacheTtl())));
-        return loaded;
+        cachePort.putPayment(cacheKey, loaded, now.plus(settings.cacheTtl()));
+        return Optional.of(loaded);
     }
 
     private VrpCollectionResult processCollectionLocked(SubmitVrpPaymentCommand command, Instant now) {
@@ -273,7 +275,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
 
     private static VrpPayment validatePaymentAccess(VrpPayment payment, String tppId) {
         if (!payment.tppId().equals(tppId)) {
-            throw new ForbiddenException("Consent participant mismatch");
+            throw new PaymentNotAccessibleException(PaymentNotAccessibleException.Reason.OTHER_TPP);
         }
         return payment;
     }

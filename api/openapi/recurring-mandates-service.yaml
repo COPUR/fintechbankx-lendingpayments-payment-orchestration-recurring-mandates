@@ -149,6 +149,9 @@ paths:
   /payments/{paymentId}:
     get:
       summary: Get recurring payment status
+      description: >-
+        An unknown payment id and another TPP's payment get the same 403 body:
+        code FORBIDDEN, message "Payment not found or not authorised".
       operationId: getRecurringPayment
       security:
         - bearerAuth: []
@@ -166,6 +169,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentResponse'
+        '403':
+          $ref: '#/components/responses/Error'
 components:
   responses:
     Error:

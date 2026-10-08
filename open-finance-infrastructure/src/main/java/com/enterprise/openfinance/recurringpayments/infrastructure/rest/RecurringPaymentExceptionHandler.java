@@ -4,6 +4,7 @@ import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRul
 import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
 import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpErrorResponse;
 import com.enterprise.openfinance.recurringpayments.domain.exception.MandateVersionConflictException;
@@ -38,6 +39,16 @@ public class RecurringPaymentExceptionHandler {
         log.info("Consent refused: reason={} interactionId={}", exception.reason(), interactionId);
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(VrpErrorResponse.of("FORBIDDEN", ConsentNotUsableException.MESSAGE, interactionId));
+    }
+
+    /** One body for an unknown payment and another TPP's payment; the reason goes to the log only. */
+    @ExceptionHandler(PaymentNotAccessibleException.class)
+    public ResponseEntity<VrpErrorResponse> handlePaymentNotAccessible(PaymentNotAccessibleException exception,
+                                                                       HttpServletRequest request) {
+        String interactionId = interactionId(request);
+        log.info("Payment refused: reason={} interactionId={}", exception.reason(), interactionId);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(VrpErrorResponse.of("FORBIDDEN", PaymentNotAccessibleException.MESSAGE, interactionId));
     }
 
     @ExceptionHandler(ForbiddenException.class)

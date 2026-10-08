@@ -340,7 +340,8 @@ class RecurringMandatesServiceIT {
     }
 
     @Test
-    void anotherTppCannotReadUseOrRevokeTheMandate() throws Exception {
+    void anotherTppCannotReadUseOrRevokeTheMandate(org.springframework.boot.test.system.CapturedOutput log)
+            throws Exception {
         String consentId = createConsent("5000.00", null);
         String paymentId = submit(consentId, "IDEMP-OWN-1", "10.00");
 
@@ -369,6 +370,22 @@ class RecurringMandatesServiceIT {
         }
         assertThat(bodies).hasSize(6).containsOnly(bodies.get(0));
         assertThat(bodies.get(0)).contains("Consent not found or not authorised");
+
+        // Payments likewise: another TPP's payment and an unknown payment id get one 403 body.
+        List<String> paymentBodies = new ArrayList<>();
+        for (String id : List.of(paymentId, "PAY-VRP-NEVER-ISSUED")) {
+            MvcResult result = mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payments/{id}", id)))
+                    .andExpect(status().isForbidden()).andReturn();
+            com.fasterxml.jackson.databind.node.ObjectNode body =
+                    (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
+            body.remove("timestamp");
+            paymentBodies.add(body.toString());
+        }
+        assertThat(paymentBodies).containsOnly(paymentBodies.get(0));
+        assertThat(paymentBodies.get(0)).contains("\"code\":\"FORBIDDEN\"", "Payment not found or not authorised");
+        assertThat(String.join("", paymentBodies)).doesNotContain("TPP", "mismatch");
+        assertThat(log.getOut()).contains("Payment refused: reason=OTHER_TPP interactionId=it-interaction-1",
+                "Payment refused: reason=NOT_FOUND interactionId=it-interaction-1");
         // A header naming another TPP than the token's client is refused.
         mvc.perform(asTpp(get("/open-finance/v1/vrp/payment-consents/{id}", consentId)).header("x-fapi-financial-id", "TPP-002"))
                 .andExpect(status().isForbidden());

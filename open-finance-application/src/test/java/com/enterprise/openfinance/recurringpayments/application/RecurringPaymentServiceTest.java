@@ -334,7 +334,10 @@ class RecurringPaymentServiceTest {
         // An unknown mandate is refused like another TPP's (one 403, no id probing).
         assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery("CONS-404", "TPP-001", "ix-8")))
                 .isInstanceOf(ForbiddenException.class).hasMessage("Consent not found or not authorised");
-        assertThat(service.getPayment(new GetVrpPaymentQuery("PAY-404", "TPP-001", "ix-8"))).isEmpty();
+        assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery("PAY-404", "TPP-001", "ix-8")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Payment not found or not authorised")
+                .extracting("reason").isEqualTo(
+                        com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException.Reason.NOT_FOUND);
     }
 
     @Test
@@ -356,7 +359,9 @@ class RecurringPaymentServiceTest {
 
         assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery(result.paymentId(), "TPP-OTHER", "ix-9")))
                 .isInstanceOf(ForbiddenException.class)
-                .hasMessageContaining("participant mismatch");
+                .hasMessage("Payment not found or not authorised")
+                .extracting("reason").isEqualTo(
+                        com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException.Reason.OTHER_TPP);
     }
 
     @Test
