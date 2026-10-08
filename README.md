@@ -2,6 +2,69 @@
 
 Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandates** servis yetkinliğinin kaynak kodunu, kontratlarını ve operasyonel guardrail'lerini içerir.
 
+## Service at a glance (2026-10-08, Proposed)
+
+| Item | Value |
+|---|---|
+| Service id / Keycloak client | `svc-pay-recurring-mandates` |
+| Service name / Helm, image, SA | `fintechbankx-payments-recurring-mandates-service` / `payment-recurring-mandates-service` (namespace `payments`) |
+| `spring.application.name` / app label | `app.pay.recurring-mandates` / `fintechbankx.io/app: app-pay-recurring-mandates` |
+| Package root | `com.enterprise.openfinance.recurringpayments` (`domain`, `domain.port.in`, `domain.port.out`, `application`, `infrastructure.<tech>`) |
+| Modules | `open-finance-domain`, `open-finance-application`, `open-finance-infrastructure`, `open-finance-bootstrap` (Spring Boot app) |
+| Data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event` (Flyway V1, V2) |
+| API | [OpenAPI](api/openapi/recurring-mandates-service.yaml), base `/open-finance/v1/vrp` |
+| Events | [AsyncAPI](api/asyncapi/svc-pay-recurring-mandates.yaml) |
+| Ports | 8080 `http`, 8081 `http-management` (actuator, Prometheus) |
+
+### Ownership tags
+
+| Tag | Value |
+|---|---|
+| bounded_context | `payment_recurring_mandates` |
+| owning_squad | Recurring and Bulk Payments Squad |
+| owning_tribe | Lending & Payments Tribe |
+| review_cadence | quarterly |
+| data_owner | svc-pay-recurring-mandates (`sc_pay_recurring_mandates`) |
+| upstream_dependencies | Keycloak realm `fintechbankx` (TPP tokens, client credentials); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` |
+| published_events | `evt.pay.mandate.created.v1` (`Payments.Mandate.Created.v1`), `evt.pay.mandate.revoked.v1` (`Payments.Mandate.Revoked.v1`), `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.PaymentAccepted.v1`); DLQ reserved `evt.pay.mandate.dlq.v1` |
+| consumed_events | none |
+
+### Run, test, deploy
+
+| Task | Command / place |
+|---|---|
+| Full gate (unit, ArchUnit, Jacoco 85 % line, integration) | `./gradlew --no-daemon clean check` |
+| Integration tests against PostgreSQL | set `TEST_DB_URL`, `TEST_DB_USERNAME`, `TEST_DB_PASSWORD`; without them they skip locally and fail when `CI=true` |
+| Run locally without Kafka | `DB_URL=jdbc:postgresql://localhost:5432/<db> DB_USERNAME=<user> SPRING_DATASOURCE_PASSWORD=<password> ACCOUNTS_ADAPTER=in-memory OUTBOX_RELAY_ENABLED=false java -jar open-finance-bootstrap/build/libs/payment-recurring-mandates-service.jar` |
+| Container | [Dockerfile](Dockerfile) |
+| Kubernetes | [Helm chart](deploy/helm/payment-recurring-mandates-service) |
+| AWS | [Terraform](deploy/terraform) |
+| Cutover | [Runbook](docs/migration/RUNBOOK-EXTRACT-pay-recurring-mandates.md), [regression mapping](docs/migration/REGRESSION_MAPPING.md) |
+| Architecture | [Deployment and Well-Architected notes](docs/architecture/DEPLOYMENT_AND_WELL_ARCHITECTED.md) |
+
+The outbox relay is off by default (`OUTBOX_RELAY_ENABLED=false`) until the
+topics exist in the platform topic catalog; the AsyncAPI catalog PR is pending.
+
+### Service mesh
+
+The chart has no PeerAuthentication or AuthorizationPolicy; the mesh
+repository owns them. Callers that need an ALLOW rule on
+`payment-recurring-mandates-service`: the ingress gateway principal
+`cluster.local/ns/istio-ingress/sa/istio-ingressgateway`. There are no internal
+callers today. Outbound: the accounts API and Keycloak.
+
+### Removed from this repository and who owns it
+
+The seed copied generic open-finance code that was never compiled here
+(commit "remove seeded open-finance residue"):
+
+| Removed | Owner |
+|---|---|
+| Consent sagas, the Consent/Participant model and events, `DistributedConsentService`, Redis consent cache, consent controller | `fintechbankx-openfinance-consent-auth-service` |
+| Loan and account controllers | `fintechbankx-lendingpayments-loan-lifecycle-core`; accounts: no fintechbankx owner yet |
+| CBUAE directory client, Mongo analytics, monitoring models, event store | not this capability; the monolith keeps them until their owner is decided (no fintechbankx repository owns them today) |
+| `infra/terraform` (referenced a module that does not exist here) | replaced by `deploy/terraform` |
+
 ## Sorumluluk ve Sahiplik
 | Alan | Değer |
 |---|---|
@@ -60,13 +123,6 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 ## Katkı
 - Katkı süreci için `CONTRIBUTING.md` ve squad runbook'ları izlenmelidir.
 - PR'larda mimari kararlar ADR veya backlog referansı ile ilişkilendirilmelidir.
-
-## Cell-Based Architecture
-
-This repository participates in the FinTechBankX cell-based resilience program.
-
-- Plan: \
-- Backlog: \
 
 <!-- cell-architecture-start -->
 ## Cell-Based Architecture
