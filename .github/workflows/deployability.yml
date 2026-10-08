@@ -1,0 +1,74 @@
+name: Deployability
+
+# Proves every change still produces a runnable image and valid deployment
+# manifests. Nothing is pushed or applied from here.
+
+on:
+  pull_request:
+    branches: [main, dev, staging]
+  push:
+    branches: [main, dev, staging]
+
+permissions:
+  contents: read
+
+jobs:
+  container:
+    name: deploy/container-image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --tag payment-recurring-mandates-service:${{ github.sha }} .
+      - name: Image runs as non-root
+        run: |
+          user="$(docker image inspect --format '{{.Config.User}}' payment-recurring-mandates-service:${{ github.sha }})"
+          echo "image user: $user"
+          test "$user" = "10001:10001"
+
+  helm:
+    name: deploy/helm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: Lint and render chart
+        run: |
+          chart=deploy/helm/payment-recurring-mandates-service
+          args="--namespace payments \
+            --set image.repository=ci/payment-recurring-mandates-service --set image.tag=${{ github.sha }} \
+            --set externalSecret.remoteSecretName=ci/db-app \
+            --set externalSecret.serviceClientSecretName=ci/oidc-client \
+            --set config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci \
+            --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
+            --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
+            --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
+            --set config.OIDC_TOKEN_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/token \
+            --set config.ACCOUNTS_SERVICE_BASE_URL=http://accounts.ci:8080"
+          helm lint "$chart" $args
+          helm template ci "$chart" $args > /dev/null
+          helm template ci "$chart" -f "$chart/values-dev.yaml" $args > /dev/null
+      - name: Missing required config fails the render
+        run: |
+          if helm template ci deploy/helm/payment-recurring-mandates-service \
+               --set image.repository=ci/x --set image.tag=x \
+               --set externalSecret.remoteSecretName=a --set externalSecret.serviceClientSecretName=b > /dev/null 2>&1; then
+            echo "chart rendered without DB_URL / Kafka / OIDC / accounts settings"; exit 1
+          fi
+
+  terraform:
+    name: deploy/terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: deploy/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate

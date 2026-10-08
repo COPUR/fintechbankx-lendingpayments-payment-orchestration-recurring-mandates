@@ -1,0 +1,87 @@
+# Defaults are production-shaped (multi-replica, spread across zones).
+# Override per environment with values-<env>.yaml. Install into namespace
+# "payments" (platform contract).
+
+image:
+  repository: ""   # e.g. <account>.dkr.ecr.<region>.amazonaws.com/fintechbankx/payment-recurring-mandates-service
+  tag: ""          # immutable tag (git SHA); never "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 3
+
+serviceAccount:
+  name: payment-recurring-mandates-service
+  # IAM role from deploy/terraform output workload_role_arn (IRSA).
+  roleArn: ""
+
+podLabels:
+  app.kubernetes.io/part-of: fintechbankx-payments
+  fintechbankx.io/service-id: svc-pay-recurring-mandates
+  # Naming standard k8s app label (app-<ctx>-<cap>); plain `app` is reserved for the SA name by the platform contract.
+  fintechbankx.io/app: app-pay-recurring-mandates
+  sidecar.istio.io/inject: "true"
+
+service:
+  port: 8080
+  managementPort: 8081
+
+# Memory request = limit (no overcommit; the JVM sizes its heap from the limit).
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 1Gi
+
+# CPU only: JVM heap does not shrink, so memory utilisation is not a scaling signal.
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 65
+
+podDisruptionBudget:
+  minAvailable: 2
+
+networkPolicy:
+  enabled: true
+  # Namespaces whose pods may call the API on 8080 (TPP traffic arrives through the ingress gateway).
+  apiNamespaces:
+    - istio-ingress
+  # Namespaces allowed to scrape the management port 8081.
+  managementNamespaces:
+    - observability
+
+# Non-secret runtime settings, rendered into a ConfigMap. Values marked
+# "required" fail the render when empty.
+config:
+  DB_URL: ""                      # required: jdbc:postgresql://<aurora-writer>:5432/db_pay_recurring_mandates_<env>?sslmode=require
+  DB_USERNAME: pay_recurring_mandates_app
+  DB_POOL_MAX: "10"
+  KAFKA_BOOTSTRAP_SERVERS: ""     # required: MSK bootstrap_brokers_sasl_iam (port 9098)
+  KAFKA_SECURITY_PROTOCOL: SASL_SSL
+  SPRING_PROFILES_ACTIVE: kafka-msk
+  OIDC_ISSUER_URI: ""             # required: https://<identity-host>/realms/fintechbankx
+  OIDC_JWK_SET_URI: ""            # required: <issuer>/protocol/openid-connect/certs
+  OIDC_TOKEN_URI: ""              # required: <issuer>/protocol/openid-connect/token (client credentials)
+  OIDC_AUDIENCE: svc-pay-recurring-mandates
+  SERVICE_CLIENT_ID: svc-pay-recurring-mandates
+  ACCOUNTS_ADAPTER: http
+  ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API; no fintechbankx repository owns accounts yet
+  OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.*.v1 exist on the cluster
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
+
+# Credentials, synced from AWS Secrets Manager by External Secrets Operator.
+externalSecret:
+  enabled: true
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: aws-secrets-manager
+  # Secrets Manager secret from deploy/terraform output app_db_secret_name.
+  remoteSecretName: ""
+  # <env>/payment-recurring-mandates-service/oidc-client, property client_secret.
+  serviceClientSecretName: ""
+  refreshInterval: 1h
+
+topologySpread:
+  maxSkew: 1

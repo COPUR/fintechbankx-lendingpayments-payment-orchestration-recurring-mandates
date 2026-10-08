@@ -1,0 +1,36 @@
+{{- if .Values.networkPolicy.enabled }}
+# L3/L4 guard in addition to the mesh's default-deny AuthorizationPolicies
+# (owned by the mesh repository): API traffic only from the listed namespaces,
+# the management port only from observability. Egress is not restricted here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mandates.name" . }}
+  labels:
+    {{- include "mandates.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mandates.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.apiNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+    - from:
+        {{- range .Values.networkPolicy.managementNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.service.managementPort }}
+{{- end }}
