@@ -12,8 +12,6 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
-import java.util.Currency;
-import java.util.Locale;
 import java.util.List;
 import java.util.UUID;
 
@@ -23,14 +21,13 @@ import java.util.UUID;
  * raised. version is the optimistic-concurrency token the persistence adapter
  * compares on save.
  *
- * Limit rule: the accepted total per UTC calendar month may not exceed maxAmount.
+ * Limit rule: the accepted total per UTC calendar month may not exceed the limit.
  */
 public record VrpConsent(
         String consentId,
         String tppId,
         String psuId,
-        BigDecimal maxAmount,
-        String currency,
+        Money limit,
         VrpConsentStatus status,
         Instant expiresAt,
         Instant revokedAt,
@@ -48,11 +45,8 @@ public record VrpConsent(
         if (isBlank(psuId)) {
             throw new IllegalArgumentException("psuId is required");
         }
-        if (maxAmount == null || maxAmount.signum() <= 0) {
-            throw new IllegalArgumentException("maxAmount must be positive");
-        }
-        if (isBlank(currency)) {
-            throw new IllegalArgumentException("currency is required");
+        if (limit == null || !limit.isPositive()) {
+            throw new IllegalArgumentException("maxAmount (limit) must be positive");
         }
         if (status == null) {
             throw new IllegalArgumentException("status is required");
@@ -67,8 +61,22 @@ public record VrpConsent(
         consentId = consentId.trim();
         tppId = tppId.trim();
         psuId = psuId.trim();
-        currency = currency.trim().toUpperCase(Locale.ROOT);
         debtorAccountId = isBlank(debtorAccountId) ? null : debtorAccountId.trim();
+    }
+
+    /** Rehydration from stored primitives (persistence, tests). */
+    public VrpConsent(String consentId,
+                      String tppId,
+                      String psuId,
+                      BigDecimal maxAmount,
+                      String currency,
+                      VrpConsentStatus status,
+                      Instant expiresAt,
+                      Instant revokedAt,
+                      String debtorAccountId,
+                      long version) {
+        this(consentId, tppId, psuId, maxAmount == null ? null : Money.of(maxAmount, currency), status, expiresAt,
+                revokedAt, debtorAccountId, version);
     }
 
     /** A mandate without a linked debtor account, at version 0. */
@@ -87,13 +95,11 @@ public record VrpConsent(
         if (!command.expiresAt().isAfter(now)) {
             throw new BusinessRuleViolationException("ExpiryDateTime must be in the future");
         }
-        ensureMinorUnits(command.maxAmount(), command.currency());
         VrpConsent mandate = new VrpConsent(
                 consentId,
                 command.tppId(),
                 command.psuId(),
-                command.maxAmount(),
-                command.currency(),
+                Money.of(command.maxAmount(), command.currency()),
                 VrpConsentStatus.AUTHORISED,
                 command.expiresAt(),
                 null,
@@ -113,6 +119,14 @@ public record VrpConsent(
                 mandate.debtorAccountId() != null
         );
         return new MandateChange(mandate, List.of(created));
+    }
+
+    public BigDecimal maxAmount() {
+        return limit.amount();
+    }
+
+    public String currency() {
+        return limit.currencyCode();
     }
 
     public static String periodKeyOf(Instant at) {
@@ -146,7 +160,7 @@ public record VrpConsent(
         if (!isActive(now)) {
             throw new ForbiddenException("Consent expired");
         }
-        if (!currency.equalsIgnoreCase(command.currency())) {
+        if (!limit.hasCurrency(command.currency())) {
             throw new BusinessRuleViolationException("Currency mismatch");
         }
     }
@@ -156,7 +170,7 @@ public record VrpConsent(
         if (isRevoked()) {
             return new MandateChange(this, List.of());
         }
-        VrpConsent revoked = new VrpConsent(consentId, tppId, psuId, maxAmount, currency,
+        VrpConsent revoked = new VrpConsent(consentId, tppId, psuId, limit,
                 VrpConsentStatus.REVOKED, expiresAt, at, debtorAccountId, version + 1);
         return new MandateChange(revoked, List.of(
                 new MandateRevoked(UUID.randomUUID(), consentId, revoked.version(), at, tppId, reason)));
@@ -164,7 +178,7 @@ public record VrpConsent(
 
     /**
      * Accepts a collection if the mandate is usable and the month's accepted
-     * total including this amount stays within maxAmount.
+     * total including this amount stays within the limit.
      *
      * @param acceptedInPeriod total already accepted under this mandate in the period of {@code now}
      */
@@ -173,39 +187,23 @@ public record VrpConsent(
                                                  BigDecimal acceptedInPeriod,
                                                  Instant now) {
         ensureCanCollect(command, now);
-        ensureMinorUnits(command.amount(), currency);
-        BigDecimal periodTotal = acceptedInPeriod.add(command.amount());
-        if (periodTotal.compareTo(maxAmount) > 0) {
+        Money instructed = Money.of(command.amount(), limit.currencyCode());
+        Money periodTotal = Money.of(acceptedInPeriod, limit.currencyCode()).plus(instructed);
+        if (periodTotal.exceeds(limit)) {
             throw new BusinessRuleViolationException("Limit Exceeded");
         }
 
         String periodKey = periodKeyOf(now);
         VrpPayment payment = new VrpPayment(paymentId, consentId, command.tppId(), command.idempotencyKey(),
-                command.amount(), command.currency(), periodKey, VrpPaymentStatus.ACCEPTED, now);
-        VrpConsent next = new VrpConsent(consentId, tppId, psuId, maxAmount, currency, status, expiresAt,
+                instructed, periodKey, VrpPaymentStatus.ACCEPTED, now);
+        VrpConsent next = new VrpConsent(consentId, tppId, psuId, limit, status, expiresAt,
                 revokedAt, debtorAccountId, version + 1);
         MandatePaymentAccepted event = new MandatePaymentAccepted(UUID.randomUUID(), consentId, next.version(), now,
-                payment.paymentId(), payment.tppId(), payment.amount(), payment.currency(), periodKey, periodTotal);
+                payment.paymentId(), payment.tppId(), payment.amount(), payment.currency(), periodKey,
+                periodTotal.amount());
         return new PaymentAuthorisation(next, payment, event);
     }
 
-    /**
-     * Amounts may not carry more decimals than the currency's minor unit
-     * (2 for AED), so nothing is rounded silently when stored or shown.
-     */
-    static void ensureMinorUnits(BigDecimal amount, String currencyCode) {
-        Currency currency;
-        try {
-            currency = Currency.getInstance(currencyCode.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException unknown) {
-            throw new BusinessRuleViolationException("Unknown currency " + currencyCode);
-        }
-        int minorUnits = Math.max(currency.getDefaultFractionDigits(), 0);
-        if (amount.stripTrailingZeros().scale() > minorUnits) {
-            throw new BusinessRuleViolationException(
-                    "Amount has more than " + minorUnits + " decimal places for " + currency.getCurrencyCode());
-        }
-    }
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();
