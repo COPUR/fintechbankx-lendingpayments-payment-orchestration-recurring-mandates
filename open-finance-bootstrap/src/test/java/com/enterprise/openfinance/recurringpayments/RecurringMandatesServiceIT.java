@@ -326,7 +326,7 @@ class RecurringMandatesServiceIT {
 
     @Test
     @SuppressWarnings("unchecked")
-    void relayPublishesInOrderKeyedByMandateAndParksAPermanentFailureAtOnce() throws Exception {
+    void aParkedEventHoldsBackItsMandatesLaterEventsWhileOtherMandatesFlow() throws Exception {
         String first = createConsent("5000.00", null);
         submit(first, "IDEMP-RELAY-1", "10.00");
         String second = createConsent("700.00", null);
@@ -339,26 +339,35 @@ class RecurringMandatesServiceIT {
             }
             return CompletableFuture.completedFuture((SendResult<String, String>) null);
         });
+        OutboxRelay relay = relay();
 
-        assertThat(relay().relayOnce()).isEqualTo(2); // poison parked at once, the batch goes on
+        assertThat(relay.relayOnce()).isEqualTo(1); // payload error parks at once; only the other mandate flows
+        assertThat(relay.relayOnce()).isZero();     // the parked mandate stays blocked across runs
 
-        assertThat(outbox.countPending()).isZero();
         assertThat(outbox.countParked()).isEqualTo(1);
+        assertThat(outbox.countPending()).as("the first mandate's payment event waits behind its parked event").isEqualTo(1);
+        assertThat(jdbc.queryForObject("select event_type from " + SCHEMA + ".mandate_outbox_event"
+                + " where published_at is null and parked_at is null", String.class))
+                .isEqualTo("Payments.Mandate.PaymentAccepted.v1");
         java.util.Map<String, Object> parked = jdbc.queryForMap("select attempts, first_failed_at, last_error from "
                 + SCHEMA + ".mandate_outbox_event where parked_at is not null");
         assertThat(parked.get("attempts")).isEqualTo(1);
-        assertThat(parked.get("first_failed_at")).isNotNull();
         assertThat((String) parked.get("last_error")).startsWith("RecordTooLargeException: The message is 2000000 bytes");
         ArgumentCaptor<ProducerRecord<String, String>> records = ArgumentCaptor.forClass(ProducerRecord.class);
-        Mockito.verify(kafka, Mockito.times(3)).send(records.capture());
+        Mockito.verify(kafka, Mockito.times(2)).send(records.capture());
         List<String> delivered = new ArrayList<>();
         for (ProducerRecord<String, String> r : records.getAllValues()) {
             delivered.add(r.key().equals(first) ? "first:" + r.topic() : "second:" + r.topic());
         }
-        assertThat(delivered).containsExactly(
-                "first:evt.pay.mandate.created.v1",
-                "first:evt.pay.mandate.payment-accepted.v1",
-                "second:evt.pay.mandate.created.v1");
+        assertThat(delivered).containsExactly("first:evt.pay.mandate.created.v1", "second:evt.pay.mandate.created.v1");
+
+        // Runbook replay: un-park the event; it and then the held-back event go out in order.
+        PostgresTestDatabase.owner().update("update " + SCHEMA + ".mandate_outbox_event"
+                + " set parked_at = null, first_failed_at = null, attempts = 0, last_error = null where parked_at is not null");
+        Mockito.reset(kafka);
+        when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture((SendResult<String, String>) null));
+        assertThat(relay.relayOnce()).isEqualTo(2);
+        assertThat(outbox.countPending()).isZero();
     }
 
     @Test

@@ -18,11 +18,19 @@ public interface SpringDataOutboxRepository extends JpaRepository<OutboxEventJpa
     @Query(value = "select pg_try_advisory_xact_lock(:key)", nativeQuery = true)
     boolean tryRelayLock(@Param("key") long key);
 
-    /** Pending rows in insertion order; parked rows are skipped. */
+    /**
+     * Pending rows in insertion order. Parked rows are skipped, and so is every
+     * later row of a mandate that has a parked row: its events wait until the
+     * parked one is replayed or discarded, so they never go out of order.
+     */
     @Query(value = """
-            select * from mandate_outbox_event
-             where published_at is null and parked_at is null
-             order by created_seq
+            select * from mandate_outbox_event o
+             where o.published_at is null and o.parked_at is null
+               and not exists (select 1 from mandate_outbox_event p
+                                where p.aggregate_id = o.aggregate_id
+                                  and p.parked_at is not null
+                                  and p.created_seq < o.created_seq)
+             order by o.created_seq
              limit :batchSize
             """, nativeQuery = true)
     List<OutboxEventJpaEntity> findUnpublishedBatch(@Param("batchSize") int batchSize);

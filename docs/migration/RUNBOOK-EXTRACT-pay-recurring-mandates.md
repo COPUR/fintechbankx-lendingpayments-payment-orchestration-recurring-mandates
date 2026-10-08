@@ -47,7 +47,7 @@ Consequences:
 
 Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
 `/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; `outbox_parked_events`
-above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
+above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 or `outbox_relay_blocked` = 1 for 5 minutes with the relay enabled.
 
 ### Database roles
 
@@ -129,16 +129,18 @@ sidecar on.
 
 ## 4. Parked outbox events
 
-The relay has no attempt cap. A retryable Kafka failure (any `RetriableException`
-such as `TimeoutException`, `NotEnoughReplicasException`, `NetworkException`, or the
-relay's own send timeout) stops the batch and is retried on the next run; it parks
-the row only when that row has been failing continuously for longer than
-`mandates.outbox.relay.retryable-park-after` (`OUTBOX_RELAY_RETRYABLE_PARK_AFTER`,
-default `PT24H`), measured from its `first_failed_at` (V4). An ordinary broker or
-egress outage therefore parks nothing; it shows as a growing
-`outbox_oldest_pending_age_seconds`. A permanent failure (`RecordTooLargeException`,
-`SerializationException`, `TopicAuthorizationException`, `InvalidTopicException`,
-anything not retriable) parks the row at once and the batch continues.
+Policy: ADR-021 decision 4 (adr-runbooks #10, 421f7b5). The relay has no attempt cap and
+sorts a failed send into one of three classes:
+
+| Class | Errors | What the relay does | Signal |
+|---|---|---|---|
+| Retriable | any Kafka `RetriableException` (`TimeoutException`, `NotEnoughReplicasException`, `NetworkException`, ...) or the relay's own send timeout | stops the batch, retries next run; parks the row only after it has failed continuously for longer than `mandates.outbox.relay.retryable-park-after` (`OUTBOX_RELAY_RETRYABLE_PARK_AFTER`, default `PT24H`) from its `first_failed_at` (V4) | `outbox_oldest_pending_age_seconds` grows |
+| Payload | `RecordTooLargeException`, `SerializationException`, `InvalidTopicException` | parks the row at once and continues with other mandates | `outbox_parked_events` above 0 |
+| Authorisation or unclassified | `SaslAuthenticationException`, `TopicAuthorizationException`, producer construction failures, anything else | stops the batch without marking any row (no park, no attempt, no `last_error`); retries with backoff 2 s doubling to 5 min, reset by the next successful send | `outbox_relay_blocked` = 1 (alert after 5 min); fix IRSA/MSK policy or ACLs, the relay resumes by itself |
+
+A parked row holds back its mandate: the relay publishes none of that mandate's later
+events, in that run or later ones, until the parked row is replayed or discarded. Other
+mandates keep flowing, so consumers never see a mandate's events out of order.
 
 `outbox_parked_events` above 0 means a consumer is missing an event. Find the rows:
 
@@ -159,6 +161,7 @@ SET parked_at = NULL, first_failed_at = NULL, attempts = 0, last_error = NULL
 WHERE event_id = '<event id>';
 ```
 
-The replayed row goes out in `created_seq` order on the next run. A parked event can
-put a mandate's later events ahead of it; consumers order by `aggregateVersion` in the
-envelope and de-duplicate on `eventId`.
+The replayed row goes out on the next run, followed by the mandate's held-back events in
+`created_seq` order. To discard a parked event instead (only with the consumers' owners'
+agreement, since they then never see it), delete the row as the schema owner; the
+mandate's later events then flow. Consumers de-duplicate on `eventId`.

@@ -85,6 +85,18 @@ public class OutboxConfiguration {
                     sendTimeout, retention, retryableParkAfter);
         }
 
+        /**
+         * 1 while the relay backs off after an authorisation or unclassified
+         * Kafka failure (Prometheus outbox_relay_blocked; ADR-021 decision 4):
+         * alert on 1 for more than 5 minutes. No identifiers in tags.
+         */
+        @Bean
+        Gauge outboxRelayBlockedGauge(MeterRegistry registry, OutboxRelay relay) {
+            return Gauge.builder("outbox.relay.blocked", relay, r -> r.blocked() ? 1d : 0d)
+                    .description("1 while the outbox relay is blocked by an authorisation or unclassified Kafka failure")
+                    .register(registry);
+        }
+
         @Bean
         RelaySchedule relaySchedule(OutboxRelay relay) {
             return new RelaySchedule(relay);
