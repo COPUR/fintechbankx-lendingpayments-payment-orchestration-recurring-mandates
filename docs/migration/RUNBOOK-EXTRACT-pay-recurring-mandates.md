@@ -41,13 +41,45 @@ Consequences:
 |---|---|---|
 | 1 | DBA bootstrap (section "Database roles" below): create the schema owner `pay_recurring_mandates_owner` and the runtime role `pay_recurring_mandates_app`, write their credentials to `<env>/payment-recurring-mandates-service/db-migration` and `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`), `migration.remoteSecretName` to `migration_db_secret_name`. Deploy with `OUTBOX_RELAY_ENABLED=false`; the pre-install hook Job runs Flyway as the owner (V1 to V5) before the pods start. | uninstall the chart; drop the schema |
 | 2 | Mesh team has applied "Requests to the mesh team" below: B (Aurora, MSK, STS egress) before step 1 completes, otherwise the readiness check (`db`) fails under `REGISTRY_ONLY`; A (gateway route) and C (callee ALLOW rules) before step 3. | remove the route; ALLOW rules and egress can stay |
-| 3 | Route `/open-finance/v1/vrp/**` at the ingress gateway from the monolith to this service; announce to TPPs that mandates must be re-created. | route back to the monolith (its in-memory state was empty after any restart, so nothing is lost either way) |
-| 4 | Once `evt.pay.mandate.*.v1` exist in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 1 are relayed in order. | relay off; events stay in the outbox |
+| 3 | Route `/open-finance/v1/vrp/**` at the ingress gateway from the monolith to this service; announce to TPPs that mandates must be re-created. The soak window starts (72 h without a rollback trigger). | "Rollback during the soak window" below: freeze the writes, route back, account for what stays here |
+| 4 | Only after the soak window ended without a rollback, and once `evt.pay.mandate.*.v1` exist in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 3 are relayed in order. | relay off; unsent events stay in the outbox (events already published cannot be recalled) |
 | 5 | Remove `recurringpayments` from the monolith (`open-finance-context`). | revert the removal commit |
 
 Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
 `/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; `outbox_parked_events`
 above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 or `outbox_relay_blocked` = 1 for 5 minutes with the relay enabled.
+
+### Rollback during the soak window
+
+The outbox relay stays off (`OUTBOX_RELAY_ENABLED=false`) for the whole soak window, so no
+consumer learns of a mandate that a rollback would orphan.
+
+1. Freeze writes: at the ingress gateway, answer `POST /open-finance/v1/vrp/payment-consents`
+   and `POST /open-finance/v1/vrp/payments` with 503 (`Retry-After`) for both backends. Reads
+   and `DELETE` (revocation) stay open on this service until step 3 of this list.
+2. Export the state created since cutover, as the schema owner:
+   `mandate_record` (mandates, including revocations), `mandate_payment` (accepted
+   collections and the month they count against) and the unsent `mandate_outbox_event` rows.
+3. Route `/open-finance/v1/vrp/**` back to the monolith, then lift the freeze.
+
+What a rollback loses or leaves to replay, exactly:
+
+- **Lost on the monolith side**: every mandate created and every collection accepted on this
+  service since cutover. The monolith keeps mandates in memory only and cannot import them; TPPs
+  must re-create those mandates on the monolith, and their PSUs must authorise again.
+- **Monthly limit not carried over**: collections accepted here do not count toward the
+  monolith's limit. Until the month ends, a re-created mandate could collect up to its full limit
+  again on the monolith; the payments squad uses the export from step 2 to cap or refuse those
+  collections by hand.
+- **Revocations made here** are not known to the monolith; mandates revoked here must not be
+  re-created there (check the export).
+- **Nothing published to be recalled**: with the relay off, no `evt.pay.mandate.*` event left this
+  service; the unsent outbox rows stay in `sc_pay_recurring_mandates` and are discarded (or relayed
+  later if the cutover is retried with the same data, which also needs the mandates restored).
+- **Not lost**: the data in `sc_pay_recurring_mandates` itself; the schema is kept until the
+  cutover is retried or formally abandoned.
+- Mandates that lived in the monolith's memory before cutover were already gone (restart or
+  cutover); a rollback does not bring them back.
 
 ### Database roles
 
