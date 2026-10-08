@@ -1,0 +1,5 @@
+# Accepted (governance, on condition that this repo runs the catalog's oasdiff check) 2026-10-08, review blocker on PR #13: a TPP could create an AUTHORISED mandate for any PSU and account; mandates are now bound to a consent the PSU authorised in consent-authorization-service (Data.ConsentId), and the old request schema (MaximumIndividualAmount/PeriodType/ExpirationDateTime) never matched the implementation, which has always read Data.Limit.
+# oasdiff --err-ignore lines: method, path, then the oasdiff message. Anything not listed still fails.
+# Once merged this waiver is stale and never applied again; scripts/ci/oasdiff-breaking.sh makes the next PR that touches the spec delete it.
+POST /payment-consents added the new required request property 'Data/ConsentId'
+POST /payment-consents added the new required request property 'Data/Limit'
