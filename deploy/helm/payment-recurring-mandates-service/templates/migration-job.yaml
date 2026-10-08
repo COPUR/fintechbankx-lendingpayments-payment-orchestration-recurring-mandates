@@ -41,8 +41,11 @@ kind: Job
 metadata:
   name: {{ include "mandates.migrationName" . }}
   labels:
-    {{- include "mandates.labels" . | nindent 4 }}
+    {{- include "mandates.instanceLabels" . | nindent 4 }}
     app.kubernetes.io/component: db-migration
+    app.kubernetes.io/part-of: fintechbankx-payments
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
     helm.sh/hook-weight: "0"
@@ -59,7 +62,9 @@ spec:
       labels:
         {{- include "mandates.instanceLabels" . | nindent 8 }}
         app.kubernetes.io/component: db-migration
-        fintechbankx.io/service-id: {{ index .Values.podLabels "fintechbankx.io/service-id" }}
+        # No fintechbankx.io/service-id: observability scrapes and alerts
+        # (ServiceAllInstancesDown) on that label; a completed Job pod is not
+        # a service instance.
         sidecar.istio.io/inject: {{ .Values.migration.istioSidecar | quote }}
       annotations:
         # A classic Istio sidecar never exits, so the Job would never

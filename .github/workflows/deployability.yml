@@ -88,9 +88,10 @@ jobs:
             echo "chart rendered a remoteRef key outside <env>/$sa/" >&2; exit 1
           fi
           # Mesh egress (allow-egress-aurora) selects app.kubernetes.io/name only: the hook Job pod
-          # carries the SA name; component labels keep it out of the API pods' selectors.
-          python scripts/ci/helm-selector-check.py "$sa" <<<"$rendered"
-          helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa"
+          # carries the SA name; component labels keep it out of the API pods' selectors. Only the
+          # API pods carry fintechbankx.io/service-id (observability scrape and alert key).
+          python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates <<<"$rendered"
+          helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates
       - name: Missing required config fails the render
         run: |
           if helm template ci deploy/helm/payment-recurring-mandates-service \

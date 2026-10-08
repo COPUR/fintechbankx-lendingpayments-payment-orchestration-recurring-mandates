@@ -7,7 +7,11 @@ app.kubernetes.io/name = the service account name. The component label then
 keeps it out of everything that selects the API pods: the Service, the PDB,
 the chart's NetworkPolicy, the Deployment selector and its spread constraints.
 
-Usage: helm template ... | python3 scripts/ci/helm-selector-check.py <service account>
+Observability (PodMonitor fintechbankx-services, ServiceAllInstancesDown) keys on
+the pod label fintechbankx.io/service-id: the API pods carry it, the Job pod must
+not (it would be scraped and, once completed, count as a not-ready instance).
+
+Usage: helm template ... | python3 scripts/ci/helm-selector-check.py <service account> <service id>
 """
 import sys
 
@@ -15,6 +19,7 @@ import yaml
 
 NAME = "app.kubernetes.io/name"
 COMPONENT = "app.kubernetes.io/component"
+SERVICE_ID = "fintechbankx.io/service-id"
 
 
 def fail(message):
@@ -27,9 +32,9 @@ def matches(selector, labels):
 
 
 def main():
-    if len(sys.argv) != 2:
-        fail("usage: helm-selector-check.py <service account>")
-    service_account = sys.argv[1]
+    if len(sys.argv) != 3:
+        fail("usage: helm-selector-check.py <service account> <service id>")
+    service_account, service_id = sys.argv[1], sys.argv[2]
     docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
     by_kind = {}
     for doc in docs:
@@ -49,6 +54,11 @@ def main():
         fail(f"Job pod {COMPONENT} must be db-migration, got {job_pod.get(COMPONENT)!r}")
     if api_pod.get(NAME) != service_account or api_pod.get(COMPONENT) != "api":
         fail(f"Deployment pods need {NAME}={service_account} and {COMPONENT}=api")
+
+    if api_pod.get(SERVICE_ID) != service_id:
+        fail(f"Deployment pods need {SERVICE_ID}={service_id}, got {api_pod.get(SERVICE_ID)!r}")
+    if SERVICE_ID in job_pod:
+        fail(f"Job pod must not carry {SERVICE_ID} (observability would treat it as a service instance)")
 
     selectors = [("Deployment selector", deployment["spec"]["selector"]["matchLabels"])]
     for i, spread in enumerate(deployment["spec"]["template"]["spec"].get("topologySpreadConstraints", [])):
