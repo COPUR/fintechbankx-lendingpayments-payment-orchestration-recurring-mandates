@@ -57,8 +57,11 @@ The chart has no PeerAuthentication or AuthorizationPolicy; the mesh
 repository owns them. Callers that need an ALLOW rule on
 `payment-recurring-mandates-service`: the ingress gateway principal
 `cluster.local/ns/istio-ingress/sa/istio-ingressgateway`. There are no internal
-callers today. Outbound: consent-authorization-service (needs an ALLOW rule there for
-`cluster.local/ns/payments/sa/payment-recurring-mandates-service`), the accounts API and Keycloak.
+callers today. Outbound: consent-authorization-service (ALLOW rule for
+`cluster.local/ns/payments/sa/payment-recurring-mandates-service` on `GET /api/v1/consents/*`,
+reported applied by the mesh team), the accounts API and Keycloak. The full list of
+requests to the mesh team (gateway route, Aurora/MSK/STS egress under `REGISTRY_ONLY`,
+callee ALLOW rules) is in the runbook, "Requests to the mesh team".
 
 ### Mandates are bound to PSU-authorised consents
 

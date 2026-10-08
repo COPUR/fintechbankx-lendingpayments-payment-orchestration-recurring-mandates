@@ -40,7 +40,7 @@ Consequences:
 | Step | Action | Rollback |
 |---|---|---|
 | 1 | DBA bootstrap (section "Database roles" below): create the schema owner `pay_recurring_mandates_owner` and the runtime role `pay_recurring_mandates_app`, write their credentials to `<env>/payment-recurring-mandates-service/db-migration` and `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`), `migration.remoteSecretName` to `migration_db_secret_name`. Deploy with `OUTBOX_RELAY_ENABLED=false`; the pre-install hook Job runs Flyway as the owner (V1 to V5) before the pods start. | uninstall the chart; drop the schema |
-| 2 | Mesh repository adds the ALLOW rule for the ingress gateway principal `cluster.local/ns/istio-ingress/sa/istio-ingressgateway` on `payment-recurring-mandates-service` (no internal callers today). | remove the rule |
+| 2 | Mesh team has applied "Requests to the mesh team" below: B (Aurora, MSK, STS egress) before step 1 completes, otherwise the readiness check (`db`) fails under `REGISTRY_ONLY`; A (gateway route) and C (callee ALLOW rules) before step 3. | remove the route; ALLOW rules and egress can stay |
 | 3 | Route `/open-finance/v1/vrp/**` at the ingress gateway from the monolith to this service; announce to TPPs that mandates must be re-created. | route back to the monolith (its in-memory state was empty after any restart, so nothing is lost either way) |
 | 4 | Once `evt.pay.mandate.*.v1` exist in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 1 are relayed in order. | relay off; events stay in the outbox |
 | 5 | Remove `recurringpayments` from the monolith (`open-finance-context`). | revert the removal commit |
@@ -73,6 +73,46 @@ it explicitly. Pending on the platform side, not worked around here: microservic
 (terraform-modules, ref=main) still names its runtime secret `<env>-<slug>/runtime`
 and uses `timestamp()` in tags; Platform fixes both in terraform-modules #11.
 
+### Requests to the mesh team
+
+Raise these in `fintechbankx-platform-mesh-security-service-mesh` (owner: platform mesh
+squad) before step 1. The chart ships no Istio objects; everything below is theirs to add.
+Namespace `payments` is default-deny and outbound traffic is `REGISTRY_ONLY`.
+
+**A. Gateway route (public paths).** Host: the Open Finance API host of the environment.
+Route to `payment-recurring-mandates-service.payments.svc.cluster.local:8080`:
+`POST /open-finance/v1/vrp/payment-consents`, `GET` and `DELETE
+/open-finance/v1/vrp/payment-consents/*`, `POST /open-finance/v1/vrp/payments`, `GET
+/open-finance/v1/vrp/payments/*`, with the platform's forwarded-header rules (the DPoP
+`htu` check uses `X-Forwarded-Proto/Host/Port`) and Keycloak `RequestAuthentication` for
+TPP tokens (`aud` must contain `svc-pay-recurring-mandates`, DPoP-bound). Nothing else is
+public; `8081` (actuator) never is. Inbound ALLOW: principal
+`cluster.local/ns/istio-ingress/sa/istio-ingressgateway` on port 8080.
+
+**B. Egress under `REGISTRY_ONLY` (ServiceEntry, `MESH_EXTERNAL`, `resolution: DNS`,
+exported to `payments`).**
+
+| Destination | Hosts | Port / protocol | Why |
+|---|---|---|---|
+| Aurora PostgreSQL | cluster writer endpoint (Terraform output `jdbc_url` host) and `reader_endpoint` | 5432 `TLS` (the service does its own TLS, `sslmode=verify-full`) | JDBC; the readiness group includes `db`, so without it the pods never become ready |
+| Amazon MSK | broker hostnames of the IAM listener (`KAFKA_BOOTSTRAP_SERVERS`) | 9098 `TLS` | outbox relay (IAM auth via IRSA); needed before `OUTBOX_RELAY_ENABLED=true` |
+| AWS STS (regional endpoint) | `sts.<region>.amazonaws.com` | 443 `TLS` | IRSA web-identity exchange used by the MSK IAM client |
+
+The Flyway migration Job (Helm hook) runs without a sidecar by default
+(`migration.istioSidecar: false`), so it is not subject to the egress policy and only
+reaches Aurora; tell the mesh team if the cluster runs native sidecars, then turn the
+sidecar on.
+
+**C. Callee ALLOW rules (this service as the caller, principal
+`cluster.local/ns/payments/sa/payment-recurring-mandates-service`).**
+
+| Callee namespace / workload | Port | Paths | Why | Status |
+|---|---|---|---|---|
+| `open-finance` / `consent-authorization-service` | 8080 | `GET /api/v1/consents/*` | PSU-authorised consent behind every mandate and collection | applied by the mesh team per coordinator note 2026-10-08 (not verified from this repository) |
+| accounts API (no owner yet; interim, see checklist) | as configured | `GET` on `ACCOUNTS_SERVICE_PATH` | debtor account status | to request once a provider exists |
+| `identity` / `keycloak` | 8080 | `POST /realms/fintechbankx/protocol/openid-connect/token` and the realm `certs` (JWKS) | client-credentials token and JWT validation | to request |
+| `observability` / `otel-collector` | 4318 | OTLP HTTP | traces | to request |
+
 ## 3. Acceptance checklist
 
 - [x] Service builds and tests standalone (`./gradlew check`, including PostgreSQL integration tests with `TEST_DB_URL`)
@@ -84,7 +124,7 @@ and uses `timestamp()` in tags; Platform fixes both in terraform-modules #11.
 - [x] Debtor account check through the accounts API with a service token, failing closed
 - [ ] An accounts API serving `GET /api/v1/accounts/{accountId}` to services (interim gap: the monolith has no internal account-status read; its only account read is the TPP-facing AIS `GET /open-finance/v1/accounts/{accountId}` in `open-finance-context`, which needs a PSU AIS consent, a DPoP-bound TPP token and returns `Data.Account.Status` without a debit flag; it is being extracted to svc-of-personal-financial-data. `ACCOUNTS_SERVICE_BASE_URL` and `ACCOUNTS_SERVICE_PATH` are configurable; until a provider exists, mandates naming a debtor account fail closed with 503)
 - [ ] Topics `evt.pay.mandate.*.v1` in the platform topic catalog and AsyncAPI catalog PR merged
-- [ ] Mesh ALLOW rule for the ingress gateway (mesh repository)
+- [ ] Mesh team requests A (gateway route and ingress ALLOW), B (Aurora, MSK, STS egress) and C (callee ALLOW rules) applied; consent-authorization-service ALLOW reported applied, others open
 - [ ] Ingress route switched; monolith `recurringpayments` removed
 
 ## 4. Parked outbox events
