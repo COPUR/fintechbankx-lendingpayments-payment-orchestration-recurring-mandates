@@ -91,19 +91,25 @@ public record VrpConsent(
         this(consentId, tppId, psuId, maxAmount, currency, status, expiresAt, revokedAt, null, 0L);
     }
 
-    public static MandateChange authorise(String consentId, CreateVrpConsentCommand command, Instant now) {
-        if (!command.expiresAt().isAfter(now)) {
+    /**
+     * Authorises a mandate under a consent the PSU authorised in the consent
+     * service. The mandate takes the consent's id, PSU and debtor account
+     * (see {@link PsuConsent#termsFor}); only the limit comes from the TPP.
+     */
+    public static MandateChange authorise(PsuConsent consent, CreateVrpConsentCommand command, Instant now) {
+        MandateTerms terms = consent.termsFor(command, now);
+        if (!terms.expiresAt().isAfter(now)) {
             throw new BusinessRuleViolationException("ExpiryDateTime must be in the future");
         }
         VrpConsent mandate = new VrpConsent(
-                consentId,
-                command.tppId(),
-                command.psuId(),
+                terms.mandateId(),
+                terms.tppId(),
+                terms.psuId(),
                 Money.of(command.maxAmount(), command.currency()),
                 VrpConsentStatus.AUTHORISED,
-                command.expiresAt(),
+                terms.expiresAt(),
                 null,
-                command.debtorAccountId(),
+                terms.debtorAccountId(),
                 0L
         );
         MandateCreated created = new MandateCreated(

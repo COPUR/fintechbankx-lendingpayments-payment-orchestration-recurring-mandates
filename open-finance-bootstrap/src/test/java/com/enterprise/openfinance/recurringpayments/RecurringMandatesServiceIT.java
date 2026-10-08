@@ -96,6 +96,12 @@ class RecurringMandatesServiceIT {
     @org.springframework.boot.test.mock.mockito.SpyBean
     com.enterprise.openfinance.recurringpayments.domain.port.out.DebtorAccountPort debtorAccounts;
     @Autowired javax.sql.DataSource dataSource;
+    // consent-authorization-service stand-in: consents the PSU authorised, by id.
+    @MockBean com.enterprise.openfinance.recurringpayments.domain.port.out.PsuConsentPort consentService;
+    private final java.util.Map<String, com.enterprise.openfinance.recurringpayments.domain.model.PsuConsent> psuConsents =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final List<String> consentCallStates = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final java.util.concurrent.atomic.AtomicInteger consentIds = new java.util.concurrent.atomic.AtomicInteger();
     // The real decoder (issuer + audience validation) is covered by SecurityConfigurationTest;
     // here a token "tok-<client>" stands for a valid Keycloak token of that TPP client.
     @MockBean JwtDecoder jwtDecoder;
@@ -114,6 +120,25 @@ class RecurringMandatesServiceIT {
                     .claim("cnf", java.util.Map.of("jkt", ItDpop.thumbprint()))
                     .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300)).build();
         });
+    }
+
+    @BeforeEach
+    void consentService() {
+        psuConsents.clear();
+        consentCallStates.clear();
+        when(consentService.findConsent(anyString())).thenAnswer(invocation -> {
+            consentCallStates.add("tx=" + org.springframework.transaction.support.TransactionSynchronizationManager
+                    .isActualTransactionActive());
+            return java.util.Optional.ofNullable(psuConsents.get(invocation.<String>getArgument(0)));
+        });
+    }
+
+    /** A consent TPP-001's PSU authorised for VRP over the given accounts. */
+    private String psuConsent(boolean usable, String... accounts) {
+        String id = "CONS-AUTH-" + consentIds.incrementAndGet();
+        psuConsents.put(id, new com.enterprise.openfinance.recurringpayments.domain.model.PsuConsent(id, TPP, "PSU-001",
+                java.util.Set.of("INITIATEVRP"), java.util.Set.of(accounts), Instant.parse("2099-06-01T00:00:00Z"), usable));
+        return id;
     }
 
     @BeforeEach
@@ -178,7 +203,7 @@ class RecurringMandatesServiceIT {
     void blockedDebtorAccountIsRefusedAndNothingIsStored() throws Exception {
         mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(consentJson("5000.00", "ACC-AED-BLOCKED")))
+                        .content(consentJson(psuConsent(true, "ACC-AED-BLOCKED"), "5000.00", "ACC-AED-BLOCKED")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Debtor account is not active"));
 
@@ -385,6 +410,44 @@ class RecurringMandatesServiceIT {
         submit(consentId, "IDEMP-REMOTE-1", "10.00");
 
         assertThat(seen).hasSize(2).containsOnly("tx=false,connections=0");
+        assertThat(consentCallStates).hasSize(2).containsOnly("tx=false");
+    }
+
+    @Test
+    void aMandateNeedsAConsentThePsuAuthorisedForThisTppAndOnlyOneMandatePerConsent() throws Exception {
+        // Unknown consent, consent still pending, consent of another PSU: 403, nothing stored.
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents")).contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson("CONS-UNKNOWN", "5000.00", null)))
+                .andExpect(status().isForbidden());
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents")).contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson(psuConsent(false, "ACC-AED-ACTIVE"), "5000.00", null)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Consent is not authorised by the PSU"));
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents")).contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson(psuConsent(true, "ACC-AED-ACTIVE"), "5000.00", null)
+                                .replace("PSU-001", "PSU-SOMEONE-ELSE")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("PsuId does not match the consent"));
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_record", Integer.class)).isZero();
+
+        // Two concurrent requests for the same consent: one mandate, one 409.
+        String consentId = psuConsent(true, "ACC-AED-ACTIVE");
+        List<MvcResult> results = race(2, i -> asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                .contentType(MediaType.APPLICATION_JSON).content(consentJson(consentId, "5000.00", null)));
+        assertThat(results).extracting(r -> r.getResponse().getStatus()).containsExactlyInAnyOrder(201, 409);
+        assertThat(jdbc.queryForObject("select consent_id from " + SCHEMA + ".mandate_record", String.class))
+                .isEqualTo(consentId);
+    }
+
+    @Test
+    void consentServiceOutageFailsClosedWith503() throws Exception {
+        when(consentService.findConsent(anyString())).thenThrow(
+                new com.enterprise.openfinance.recurringpayments.infrastructure.external.ConsentServiceUnavailableException(
+                        "down", null));
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents")).contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson("CONS-ANY", "5000.00", null)))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("DEPENDENCY_UNAVAILABLE"));
     }
 
     @Test
@@ -421,9 +484,10 @@ class RecurringMandatesServiceIT {
     }
 
     private String createConsent(String limit, String debtorAccount) throws Exception {
+        String consentId = psuConsent(true, debtorAccount == null ? "ACC-AED-ACTIVE" : debtorAccount);
         MvcResult result = mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(consentJson(limit, debtorAccount)))
+                        .content(consentJson(consentId, limit, debtorAccount)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.Data.Status").value("Authorised"))
                 .andReturn();
@@ -457,12 +521,12 @@ class RecurringMandatesServiceIT {
         }
     }
 
-    private static String consentJson(String limit, String debtorAccount) {
+    private static String consentJson(String consentId, String limit, String debtorAccount) {
         String account = debtorAccount == null ? "" : ", \"DebtorAccount\": {\"Identification\": \"" + debtorAccount + "\"}";
         return """
-                {"Data": {"PsuId": "PSU-001", "Limit": {"Amount": "%s", "Currency": "AED"},
+                {"Data": {"ConsentId": "%s", "PsuId": "PSU-001", "Limit": {"Amount": "%s", "Currency": "AED"},
                  "ExpiryDateTime": "2099-01-01T00:00:00Z"%s}}
-                """.formatted(limit, account);
+                """.formatted(consentId, limit, account);
     }
 
     private static MockHttpServletRequestBuilder asTpp(MockHttpServletRequestBuilder request) {

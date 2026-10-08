@@ -83,4 +83,20 @@ class RecurringPaymentExceptionHandlerTest {
         assertThat(notFound.getStatusCode().value()).isEqualTo(404);
         assertThat(notFound.getBody().code()).isEqualTo("NOT_FOUND");
     }
+
+    @Test
+    void aSecondMandateForAConsentIs409AndAConsentServiceOutageIs503() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+
+        var exists = handler.handleMandateExists(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.MandateAlreadyExistsException("dup"), request);
+        var down = handler.handleConsentServiceDown(
+                new com.enterprise.openfinance.recurringpayments.infrastructure.external.ConsentServiceUnavailableException("x", null),
+                request);
+
+        assertThat(exists.getStatusCode().value()).isEqualTo(409);
+        assertThat(exists.getBody().code()).isEqualTo("MANDATE_EXISTS");
+        assertThat(down.getStatusCode().value()).isEqualTo(503);
+        assertThat(down.getBody().code()).isEqualTo("DEPENDENCY_UNAVAILABLE");
+    }
 }

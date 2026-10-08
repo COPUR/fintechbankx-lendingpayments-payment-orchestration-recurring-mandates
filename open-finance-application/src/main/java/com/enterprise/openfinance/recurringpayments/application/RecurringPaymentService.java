@@ -26,6 +26,9 @@ import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpPaymentPo
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpConsentQuery;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpPaymentQuery;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateTransactions;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.PsuConsentPort;
+import com.enterprise.openfinance.recurringpayments.domain.model.PsuConsent;
+import com.enterprise.openfinance.recurringpayments.domain.exception.MandateAlreadyExistsException;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
@@ -39,7 +42,11 @@ import java.util.UUID;
  * same transaction. Collections run under a per-mandate lock so the monthly
  * total is read and extended by one request at a time.
  *
- * Remote calls (accounts) run first, outside any transaction and lock, so a
+ * A mandate exists only under a consent the PSU authorised in the consent
+ * service ({@link PsuConsentPort}); it takes that consent's id, PSU and
+ * debtor account, and every collection re-checks the consent.
+ *
+ * Remote calls (consent, accounts) run first, outside any transaction and lock, so a
  * slow dependency never holds a database connection or blocks the mandate;
  * only then does {@link MandateTransactions} open the transaction.
  */
@@ -53,6 +60,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     private final VrpLockPort lockPort;
     private final MandateEventPublisher eventPublisher;
     private final DebtorAccountPort debtorAccountPort;
+    private final PsuConsentPort psuConsentPort;
     private final MandateTransactions transactions;
     private final VrpSettings settings;
     private final Clock clock;
@@ -64,6 +72,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
                                    VrpLockPort lockPort,
                                    MandateEventPublisher eventPublisher,
                                    DebtorAccountPort debtorAccountPort,
+                                   PsuConsentPort psuConsentPort,
                                    MandateTransactions transactions,
                                    VrpSettings settings,
                                    Clock clock) {
@@ -74,6 +83,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         this.lockPort = lockPort;
         this.eventPublisher = eventPublisher;
         this.debtorAccountPort = debtorAccountPort;
+        this.psuConsentPort = psuConsentPort;
         this.transactions = transactions;
         this.settings = settings;
         this.clock = clock;
@@ -82,12 +92,14 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     @Override
     public VrpConsent createConsent(CreateVrpConsentCommand command) {
         Instant now = Instant.now(clock);
-        if (command.debtorAccountId() != null) {
-            verifyDebtorAccount(command.debtorAccountId(), command.currency());
-        }
+        PsuConsent psuConsent = loadPsuConsent(command.consentId());
+        MandateChange change = VrpConsent.authorise(psuConsent, command, now);
+        verifyDebtorAccount(change.mandate().debtorAccountId(), change.mandate().currency());
 
-        MandateChange change = VrpConsent.authorise("CONS-VRP-" + UUID.randomUUID(), command, now);
         VrpConsent saved = transactions.inTransaction(() -> {
+            if (consentPort.findById(change.mandate().consentId()).isPresent()) {
+                throw new MandateAlreadyExistsException("A mandate already exists for this consent");
+            }
             VrpConsent mandate = consentPort.save(change.mandate());
             eventPublisher.publish(change.events());
             return mandate;
@@ -151,8 +163,10 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             return replay.orElseThrow();
         }
 
-        // Remote check before the transaction and the lock; the debtor account of a
-        // mandate never changes, so the locked re-read below cannot invalidate it.
+        // Remote checks before the transaction and the lock. The PSU may have withdrawn
+        // the consent in the consent service; the debtor account of a mandate never
+        // changes, so the locked re-read below cannot invalidate these checks.
+        loadPsuConsent(consent.consentId()).ensureAuthorises(consent, now);
         if (consent.debtorAccountId() != null) {
             verifyDebtorAccount(consent.debtorAccountId(), consent.currency());
         }
@@ -243,6 +257,11 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         DebtorAccount account = debtorAccountPort.findDebtorAccount(debtorAccountId)
                 .orElseThrow(() -> new BusinessRuleViolationException("Debtor account not found"));
         account.ensureDebitableIn(currency);
+    }
+
+    private PsuConsent loadPsuConsent(String consentId) {
+        return psuConsentPort.findConsent(consentId)
+                .orElseThrow(() -> new ForbiddenException("Consent not found or not authorised"));
     }
 
     private VrpConsent loadConsent(String consentId) {

@@ -62,7 +62,7 @@ class AccountsClientConfigurationTest {
     void wiresTheHttpAdapterWithAClientCredentialsManagerOrTheInMemoryDemo() {
         AccountsClientConfiguration.Http http = new AccountsClientConfiguration.Http();
         InMemoryClientRegistrationRepository registrations = new InMemoryClientRegistrationRepository(REGISTRATION);
-        OAuth2AuthorizedClientManager manager = http.serviceAuthorizedClientManager(registrations,
+        OAuth2AuthorizedClientManager manager = new AccountsClientConfiguration().serviceAuthorizedClientManager(registrations,
                 new InMemoryOAuth2AuthorizedClientService(registrations));
 
         DebtorAccountPort port = http.accountsServiceDebtorAccountPort(RestClient.builder(), manager,

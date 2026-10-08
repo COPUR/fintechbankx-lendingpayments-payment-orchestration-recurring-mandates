@@ -38,8 +38,16 @@ for spec in "${specs[@]}"; do
   git show "$BASE_REF:$spec" > "$base_file"
   cp "$spec" "$cp_file"
 
+  ignore_args=()
+  accepted="$(dirname "$spec")/accepted-breaking-changes.txt"
+  if [ -f "$accepted" ]; then
+    echo "[oasdiff] accepted breaking changes from $accepted:"
+    grep -v '^#' "$accepted" | sed '/^$/d' | sed 's/^/  /'
+    ignore_args=(--err-ignore "$accepted")
+  fi
+
   echo "[oasdiff] checking $spec"
-  if ! oasdiff breaking --fail-on ERR "$base_file" "$cp_file"; then
+  if ! oasdiff breaking --fail-on ERR "${ignore_args[@]}" "$base_file" "$cp_file"; then
     echo "[oasdiff] breaking change detected in $spec"
     fail=1
   fi

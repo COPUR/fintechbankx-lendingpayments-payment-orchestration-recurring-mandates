@@ -32,6 +32,19 @@ public class AccountsClientConfiguration {
 
     static final String SERVICE_PRINCIPAL = "svc-pay-recurring-mandates";
 
+    /** Client-credentials manager shared by the accounts and consent clients. */
+    @Bean
+    OAuth2AuthorizedClientManager serviceAuthorizedClientManager(
+            ClientRegistrationRepository clientRegistrations,
+            OAuth2AuthorizedClientService authorizedClients) {
+        AuthorizedClientServiceOAuth2AuthorizedClientManager manager =
+                new AuthorizedClientServiceOAuth2AuthorizedClientManager(clientRegistrations, authorizedClients);
+        manager.setAuthorizedClientProvider(OAuth2AuthorizedClientProviderBuilder.builder()
+                .clientCredentials()
+                .build());
+        return manager;
+    }
+
     @Bean
     @ConditionalOnProperty(name = "mandates.accounts.adapter", havingValue = "in-memory")
     DebtorAccountPort inMemoryDebtorAccountPort() {
@@ -41,18 +54,6 @@ public class AccountsClientConfiguration {
     @Configuration
     @ConditionalOnProperty(name = "mandates.accounts.adapter", havingValue = "http", matchIfMissing = true)
     static class Http {
-
-        @Bean
-        OAuth2AuthorizedClientManager serviceAuthorizedClientManager(
-                ClientRegistrationRepository clientRegistrations,
-                OAuth2AuthorizedClientService authorizedClients) {
-            AuthorizedClientServiceOAuth2AuthorizedClientManager manager =
-                    new AuthorizedClientServiceOAuth2AuthorizedClientManager(clientRegistrations, authorizedClients);
-            manager.setAuthorizedClientProvider(OAuth2AuthorizedClientProviderBuilder.builder()
-                    .clientCredentials()
-                    .build());
-            return manager;
-        }
 
         @Bean
         DebtorAccountPort accountsServiceDebtorAccountPort(

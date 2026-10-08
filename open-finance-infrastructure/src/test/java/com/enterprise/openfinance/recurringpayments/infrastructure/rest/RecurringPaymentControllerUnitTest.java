@@ -154,13 +154,17 @@ class RecurringPaymentControllerUnitTest {
         Mockito.when(useCase.createConsent(Mockito.any())).thenReturn(consent("CONS-VRP-001"));
 
         controller.createConsent("Bearer token", "proof", "ix-6", "TPP-001", new VrpConsentRequest(
-                new VrpConsentRequest.Data("PSU-001", new VrpConsentRequest.Limit("5000.00", "AED"),
+                new VrpConsentRequest.Data("CONS-AUTH-1", "PSU-001", new VrpConsentRequest.Limit("5000.00", "AED"),
                         Instant.parse("2099-01-01T00:00:00Z"), new VrpConsentRequest.DebtorAccount("ACC-AED-ACTIVE"))));
 
         ArgumentCaptor<com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand> command =
                 ArgumentCaptor.forClass(com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand.class);
         Mockito.verify(useCase).createConsent(command.capture());
         assertThat(command.getValue().debtorAccountId()).isEqualTo("ACC-AED-ACTIVE");
+        assertThat(command.getValue().consentId()).isEqualTo("CONS-AUTH-1");
+        assertThatThrownBy(() -> controller.createConsent("Bearer token", "proof", "ix-6", "TPP-001",
+                new VrpConsentRequest(new VrpConsentRequest.Data("CONS-AUTH-1", null, null, null, null))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("Data.Limit.Amount is required");
 
         assertThatThrownBy(() -> controller.getConsent("Bearer token", "proof", "ix-6", null, "CONS-VRP-001", null))
                 .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException.class)
@@ -241,9 +245,11 @@ class RecurringPaymentControllerUnitTest {
 
     private static VrpConsentRequest consentRequest(String psuId, String amount, String currency, String expiresAt) {
         return new VrpConsentRequest(new VrpConsentRequest.Data(
+                "CONS-AUTH-1",
                 psuId,
                 new VrpConsentRequest.Limit(amount, currency),
-                Instant.parse(expiresAt)
+                Instant.parse(expiresAt),
+                null
         ));
     }
 

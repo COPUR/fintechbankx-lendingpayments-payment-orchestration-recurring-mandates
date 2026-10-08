@@ -77,6 +77,12 @@ spring:
             client-secret: ${SERVICE_CLIENT_SECRET:}
             authorization-grant-type: client_credentials
             client-authentication-method: client_secret_basic
+          consent-service:
+            provider: fintechbankx
+            client-id: ${SERVICE_CLIENT_ID:svc-pay-recurring-mandates}
+            client-secret: ${SERVICE_CLIENT_SECRET:}
+            authorization-grant-type: client_credentials
+            client-authentication-method: client_secret_basic
         provider:
           fintechbankx:
             token-uri: ${OIDC_TOKEN_URI:http://localhost:8180/realms/fintechbankx/protocol/openid-connect/token}
@@ -137,6 +143,15 @@ mandates:
     adapter: ${ACCOUNTS_ADAPTER:http}
     base-url: ${ACCOUNTS_SERVICE_BASE_URL:http://accounts-service:8080}
     client-registration-id: accounts-service
+    connect-timeout: PT1S
+    read-timeout: PT2S
+  consent:
+    # Every mandate is bound to a consent the PSU authorised in
+    # consent-authorization-service (GET /api/v1/consents/{id}, usable flag
+    # authoritative). in-memory: demo consents for local runs only.
+    adapter: ${CONSENT_ADAPTER:http}
+    base-url: ${CONSENT_SERVICE_BASE_URL:http://consent-authorization-service.open-finance.svc.cluster.local:8080}
+    client-registration-id: consent-service
     connect-timeout: PT1S
     read-timeout: PT2S
   outbox:

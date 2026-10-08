@@ -1,0 +1,10 @@
+# oasdiff --err-ignore file: breaking changes accepted on purpose, one per line
+# (method, path, then the oasdiff message). Remove a line once main contains it.
+#
+# 2026-10-08, review blocker on PR #13: a TPP could create an AUTHORISED
+# mandate for any PSU and account. Mandates are now bound to a consent the
+# PSU authorised in consent-authorization-service (Data.ConsentId). The old
+# request schema (MaximumIndividualAmount/PeriodType/ExpirationDateTime) never
+# matched the implementation, which has always read Data.Limit.
+POST /payment-consents added the new required request property 'Data/ConsentId'
+POST /payment-consents added the new required request property 'Data/Limit'

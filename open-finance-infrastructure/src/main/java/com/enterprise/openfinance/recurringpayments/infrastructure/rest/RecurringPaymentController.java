@@ -57,8 +57,12 @@ public class RecurringPaymentController {
         validateSecurityHeaders(authorization, dpop, interactionId);
         String tppId = resolveTppId(financialId);
 
+        if (request.data() == null || request.data().limit() == null || request.data().limit().amount() == null) {
+            throw new IllegalArgumentException("Data.Limit.Amount is required");
+        }
         var command = new CreateVrpConsentCommand(
                 tppId,
+                request.data().consentId(),
                 request.data().psuId(),
                 new BigDecimal(request.data().limit().amount()),
                 request.data().limit().currency(),

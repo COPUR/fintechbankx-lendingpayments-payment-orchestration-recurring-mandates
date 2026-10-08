@@ -66,6 +66,10 @@ config:
   OIDC_TOKEN_URI: ""              # required: <issuer>/protocol/openid-connect/token (client credentials)
   OIDC_AUDIENCE: svc-pay-recurring-mandates
   SERVICE_CLIENT_ID: svc-pay-recurring-mandates
+  # Every mandate is bound to a PSU-authorised consent read from consent-authorization-service
+  # (internal GET /api/v1/consents/{id}, this service's client-credentials token).
+  CONSENT_ADAPTER: http
+  CONSENT_SERVICE_BASE_URL: http://consent-authorization-service.open-finance.svc.cluster.local:8080
   ACCOUNTS_ADAPTER: http
   ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API; no fintechbankx repository owns accounts yet
   OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.*.v1 exist on the cluster

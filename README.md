@@ -26,7 +26,7 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | owning_tribe | Lending & Payments Tribe |
 | review_cadence | quarterly |
 | data_owner | svc-pay-recurring-mandates (`sc_pay_recurring_mandates`) |
-| upstream_dependencies | Keycloak realm `fintechbankx` (TPP tokens, client credentials); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` |
+| upstream_dependencies | Keycloak realm `fintechbankx` (TPP tokens, client credentials); consent-authorization-service `GET /api/v1/consents/{id}` at `CONSENT_SERVICE_BASE_URL` (PSU-authorised consents, scope `INITIATEVRP`); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` |
 | published_events | `evt.pay.mandate.created.v1` (`Payments.Mandate.Created.v1`), `evt.pay.mandate.revoked.v1` (`Payments.Mandate.Revoked.v1`), `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.PaymentAccepted.v1`); no DLQ: dead-letter topics are owned by the consuming service (ADR-019/024) |
 | consumed_events | none |
 
@@ -52,7 +52,19 @@ The chart has no PeerAuthentication or AuthorizationPolicy; the mesh
 repository owns them. Callers that need an ALLOW rule on
 `payment-recurring-mandates-service`: the ingress gateway principal
 `cluster.local/ns/istio-ingress/sa/istio-ingressgateway`. There are no internal
-callers today. Outbound: the accounts API and Keycloak.
+callers today. Outbound: consent-authorization-service (needs an ALLOW rule there for
+`cluster.local/ns/payments/sa/payment-recurring-mandates-service`), the accounts API and Keycloak.
+
+### Mandates are bound to PSU-authorised consents
+
+`POST /payment-consents` takes `Data.ConsentId`, a consent the PSU authorised in
+consent-authorization-service (`usable` = true, participant = the calling TPP, scope
+`INITIATEVRP`). The mandate takes that consent's id, PSU and debtor account; the TPP
+supplies only the monthly limit. A stated `PsuId`, `DebtorAccount` or later
+`ExpiryDateTime` that differs from the consent is 403; a missing or unusable consent
+is 403; a second mandate for one consent is 409; consent service down is 503. Every
+collection re-reads the consent, so a PSU who withdraws it stops further collections.
+All remote calls run before the database transaction and the mandate lock.
 
 ### Removed from this repository and who owns it
 

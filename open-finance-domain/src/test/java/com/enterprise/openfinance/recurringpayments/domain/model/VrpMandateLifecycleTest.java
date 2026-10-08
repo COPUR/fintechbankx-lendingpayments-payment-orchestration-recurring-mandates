@@ -23,17 +23,18 @@ class VrpMandateLifecycleTest {
 
     private static final Instant NOW = Instant.parse("2026-02-09T10:00:00Z");
     private static final Instant EXPIRY = Instant.parse("2026-12-31T23:59:59Z");
+    private static final PsuConsent CONSENT = PsuConsentTest.consent(true, "TPP-001", java.util.Set.of("ACC-001"));
 
     @Test
     void authoriseCreatesAnAuthorisedMandateAtVersionZeroAndRaisesCreated() {
-        MandateChange change = VrpConsent.authorise("CONS-VRP-1", createCommand("ACC-001"), NOW);
+        MandateChange change = VrpConsent.authorise(CONSENT, createCommand("ACC-001"), NOW);
 
         VrpConsent mandate = change.mandate();
         assertThat(mandate.status()).isEqualTo(VrpConsentStatus.AUTHORISED);
         assertThat(mandate.version()).isZero();
         assertThat(mandate.debtorAccountId()).isEqualTo("ACC-001");
         assertThat(change.events()).singleElement().isInstanceOfSatisfying(MandateCreated.class, created -> {
-            assertThat(created.mandateId()).isEqualTo("CONS-VRP-1");
+            assertThat(created.mandateId()).isEqualTo("CONS-AUTH-1");
             assertThat(created.aggregateVersion()).isZero();
             assertThat(created.maxAmount()).isEqualByComparingTo("5000.00");
             assertThat(created.currency()).isEqualTo("AED");
@@ -45,17 +46,16 @@ class VrpMandateLifecycleTest {
 
     @Test
     void authoriseRejectsAnExpiryThatIsNotInTheFuture() {
-        CreateVrpConsentCommand alreadyExpired = new CreateVrpConsentCommand(
-                "TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED", NOW, "ix-1", null);
+        CreateVrpConsentCommand alreadyExpired = new CreateVrpConsentCommand("TPP-001", "CONS-AUTH-1", "PSU-001", new BigDecimal("5000.00"), "AED", NOW, "ix-1", null);
 
-        assertThatThrownBy(() -> VrpConsent.authorise("CONS-VRP-1", alreadyExpired, NOW))
+        assertThatThrownBy(() -> VrpConsent.authorise(CONSENT, alreadyExpired, NOW))
                 .isInstanceOf(BusinessRuleViolationException.class)
                 .hasMessageContaining("ExpiryDateTime must be in the future");
     }
 
     @Test
     void revokeMovesToRevokedBumpsTheVersionAndIsIdempotent() {
-        VrpConsent mandate = VrpConsent.authorise("CONS-VRP-1", createCommand(null), NOW).mandate();
+        VrpConsent mandate = VrpConsent.authorise(CONSENT, createCommand(null), NOW).mandate();
         Instant at = NOW.plusSeconds(60);
 
         MandateChange revoked = mandate.revoke(at, "Customer request");
@@ -76,7 +76,7 @@ class VrpMandateLifecycleTest {
 
     @Test
     void paymentThatExactlyReachesTheMonthlyLimitIsAccepted() {
-        VrpConsent mandate = VrpConsent.authorise("CONS-VRP-1", createCommand(null), NOW).mandate();
+        VrpConsent mandate = VrpConsent.authorise(CONSENT, createCommand(null), NOW).mandate();
 
         PaymentAuthorisation authorisation = mandate.authorisePayment(
                 "PAY-VRP-1", submit("1000.00", "AED"), new BigDecimal("4000.00"), NOW);
@@ -98,7 +98,7 @@ class VrpMandateLifecycleTest {
 
     @Test
     void paymentOneFilsOverTheMonthlyLimitIsRejected() {
-        VrpConsent mandate = VrpConsent.authorise("CONS-VRP-1", createCommand(null), NOW).mandate();
+        VrpConsent mandate = VrpConsent.authorise(CONSENT, createCommand(null), NOW).mandate();
 
         assertThatThrownBy(() -> mandate.authorisePayment(
                 "PAY-VRP-1", submit("1000.01", "AED"), new BigDecimal("4000.00"), NOW))
@@ -108,13 +108,12 @@ class VrpMandateLifecycleTest {
 
     @Test
     void amountsMayNotCarryMoreDecimalsThanTheCurrencyAllows() {
-        CreateVrpConsentCommand subFils = new CreateVrpConsentCommand(
-                "TPP-001", "PSU-001", new BigDecimal("5000.005"), "AED", EXPIRY, "ix-1", null);
-        assertThatThrownBy(() -> VrpConsent.authorise("CONS-VRP-1", subFils, NOW))
+        CreateVrpConsentCommand subFils = new CreateVrpConsentCommand("TPP-001", "CONS-AUTH-1", "PSU-001", new BigDecimal("5000.005"), "AED", EXPIRY, "ix-1", null);
+        assertThatThrownBy(() -> VrpConsent.authorise(CONSENT, subFils, NOW))
                 .isInstanceOf(BusinessRuleViolationException.class)
                 .hasMessage("Amount has more than 2 decimal places for AED");
 
-        VrpConsent mandate = VrpConsent.authorise("CONS-VRP-1", createCommand(null), NOW).mandate();
+        VrpConsent mandate = VrpConsent.authorise(CONSENT, createCommand(null), NOW).mandate();
         assertThatThrownBy(() -> mandate.authorisePayment("PAY-1", submit("10.001", "AED"), BigDecimal.ZERO, NOW))
                 .isInstanceOf(BusinessRuleViolationException.class)
                 .hasMessage("Amount has more than 2 decimal places for AED");
@@ -122,9 +121,8 @@ class VrpMandateLifecycleTest {
         assertThat(mandate.authorisePayment("PAY-1", submit("10.0000", "AED"), BigDecimal.ZERO, NOW).payment().amount())
                 .isEqualByComparingTo("10.00");
 
-        CreateVrpConsentCommand unknownCurrency = new CreateVrpConsentCommand(
-                "TPP-001", "PSU-001", new BigDecimal("5000.00"), "XYZ1", EXPIRY, "ix-1", null);
-        assertThatThrownBy(() -> VrpConsent.authorise("CONS-VRP-1", unknownCurrency, NOW))
+        CreateVrpConsentCommand unknownCurrency = new CreateVrpConsentCommand("TPP-001", "CONS-AUTH-1", "PSU-001", new BigDecimal("5000.00"), "XYZ1", EXPIRY, "ix-1", null);
+        assertThatThrownBy(() -> VrpConsent.authorise(CONSENT, unknownCurrency, NOW))
                 .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Unknown currency XYZ1");
     }
 
@@ -136,10 +134,10 @@ class VrpMandateLifecycleTest {
 
     @Test
     void paymentIsRejectedForAnotherTppARevokedOrExpiredMandateOrAnotherCurrency() {
-        VrpConsent mandate = VrpConsent.authorise("CONS-VRP-1", createCommand(null), NOW).mandate();
+        VrpConsent mandate = VrpConsent.authorise(CONSENT, createCommand(null), NOW).mandate();
 
         SubmitVrpPaymentCommand otherTpp = new SubmitVrpPaymentCommand(
-                "TPP-OTHER", "CONS-VRP-1", "IDEMP-1", new BigDecimal("10.00"), "AED", "ix-2");
+                "TPP-OTHER", "CONS-AUTH-1", "IDEMP-1", new BigDecimal("10.00"), "AED", "ix-2");
         assertThatThrownBy(() -> mandate.authorisePayment("PAY-1", otherTpp, BigDecimal.ZERO, NOW))
                 .isInstanceOf(ForbiddenException.class).hasMessageContaining("participant mismatch");
 
@@ -168,22 +166,22 @@ class VrpMandateLifecycleTest {
 
     @Test
     void rehydratedMandateKeepsItsVersion() {
-        VrpConsent stored = new VrpConsent("CONS-VRP-1", "TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED",
+        VrpConsent stored = new VrpConsent("CONS-AUTH-1", "TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED",
                 VrpConsentStatus.AUTHORISED, EXPIRY, null, "ACC-001", 7L);
 
         assertThat(stored.version()).isEqualTo(7L);
         assertThat(stored.revoke(NOW, "stop").mandate().version()).isEqualTo(8L);
-        assertThatThrownBy(() -> new VrpConsent("CONS-VRP-1", "TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED",
+        assertThatThrownBy(() -> new VrpConsent("CONS-AUTH-1", "TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED",
                 VrpConsentStatus.AUTHORISED, EXPIRY, null, null, -1L))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("version");
     }
 
     private static CreateVrpConsentCommand createCommand(String debtorAccountId) {
-        return new CreateVrpConsentCommand("TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED", EXPIRY, "ix-1",
+        return new CreateVrpConsentCommand("TPP-001", "CONS-AUTH-1", "PSU-001", new BigDecimal("5000.00"), "AED", EXPIRY, "ix-1",
                 debtorAccountId);
     }
 
     private static SubmitVrpPaymentCommand submit(String amount, String currency) {
-        return new SubmitVrpPaymentCommand("TPP-001", "CONS-VRP-1", "IDEMP-1", new BigDecimal(amount), currency, "ix-2");
+        return new SubmitVrpPaymentCommand("TPP-001", "CONS-AUTH-1", "IDEMP-1", new BigDecimal(amount), currency, "ix-2");
     }
 }

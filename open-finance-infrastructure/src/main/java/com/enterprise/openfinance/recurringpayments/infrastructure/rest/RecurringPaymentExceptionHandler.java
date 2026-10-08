@@ -6,6 +6,8 @@ import com.enterprise.openfinance.recurringpayments.domain.exception.Idempotency
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
 import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpErrorResponse;
 import com.enterprise.openfinance.recurringpayments.domain.exception.MandateVersionConflictException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.MandateAlreadyExistsException;
+import com.enterprise.openfinance.recurringpayments.infrastructure.external.ConsentServiceUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +56,22 @@ public class RecurringPaymentExceptionHandler {
     }
 
     /** The accounts service could not be reached or failed: refuse, never assume the account is fine. */
+    @ExceptionHandler(MandateAlreadyExistsException.class)
+    public ResponseEntity<VrpErrorResponse> handleMandateExists(MandateAlreadyExistsException exception,
+                                                                HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(VrpErrorResponse.of("MANDATE_EXISTS", exception.getMessage(), interactionId(request)));
+    }
+
+    @ExceptionHandler(ConsentServiceUnavailableException.class)
+    public ResponseEntity<VrpErrorResponse> handleConsentServiceDown(ConsentServiceUnavailableException exception,
+                                                                     HttpServletRequest request) {
+        log.warn("Consent service unavailable: {}", exception.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(VrpErrorResponse.of("DEPENDENCY_UNAVAILABLE", "Consent check is unavailable; retry later",
+                        interactionId(request)));
+    }
+
     @ExceptionHandler(RestClientException.class)
     public ResponseEntity<VrpErrorResponse> handleDependencyFailure(RestClientException exception,
                                                                     HttpServletRequest request) {

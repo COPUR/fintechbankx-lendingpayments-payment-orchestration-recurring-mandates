@@ -39,6 +39,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConsentResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          description: Missing or invalid token or DPoP proof
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /payment-consents/{consentId}:
     get:
       summary: Get recurring mandate consent status
@@ -184,23 +194,44 @@ components:
       properties:
         Data:
           type: object
-          required: [MaximumIndividualAmount, PeriodType, ExpirationDateTime]
+          description: >-
+            A mandate is created only under a consent the PSU authorised in
+            consent-authorization-service. The mandate takes that consent's id,
+            PSU and debtor account; the TPP supplies the monthly limit. Values
+            stated here that differ from the consent are refused with 403.
+          required: [ConsentId, Limit]
           properties:
-            MaximumIndividualAmount:
+            ConsentId:
               type: string
-            Currency:
+              description: >-
+                Id of the PSU-authorised consent (scope INITIATEVRP, participant =
+                the calling TPP). It becomes the mandate id; one mandate per consent
+                (a second request is 409).
+            PsuId:
               type: string
-            PeriodType:
-              type: string
-            ExpirationDateTime:
+              description: Optional; must equal the consent's customer.
+            Limit:
+              type: object
+              description: >-
+                Maximum accepted total per calendar month (Asia/Dubai). The amount
+                may not have more decimals than the currency's minor unit.
+              required: [Amount, Currency]
+              properties:
+                Amount:
+                  type: string
+                Currency:
+                  type: string
+            ExpiryDateTime:
               type: string
               format: date-time
+              description: Optional; defaults to the consent's expiry and may not be later than it.
             DebtorAccount:
               type: object
               description: >-
-                Optional PSU account the collections debit. When present it is
-                checked with the accounts service (active, debits allowed, same
-                currency) at creation and before every collection.
+                Optional when the consent covers exactly one account; otherwise
+                required and one of the consent's accounts. Checked with the
+                accounts service (active, debits allowed, same currency) at
+                creation and before every collection.
               required: [Identification]
               properties:
                 Identification:
