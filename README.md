@@ -11,10 +11,11 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | `spring.application.name` / app label | `app.pay.recurring-mandates` / `fintechbankx.io/app: app-pay-recurring-mandates` |
 | Package root | `com.enterprise.openfinance.recurringpayments` (`domain`, `domain.port.in`, `domain.port.out`, `application`, `infrastructure.<tech>`) |
 | Modules | `open-finance-domain`, `open-finance-application`, `open-finance-infrastructure`, `open-finance-bootstrap` (Spring Boot app) |
-| Data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event` (Flyway V1, V2) |
+| Data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` (Flyway V1 to V3) |
 | API | [OpenAPI](api/openapi/recurring-mandates-service.yaml), base `/open-finance/v1/vrp` |
 | Events | [AsyncAPI](api/asyncapi/svc-pay-recurring-mandates.yaml) |
 | Ports | 8080 `http`, 8081 `http-management` (actuator, Prometheus) |
+| TPP security | Keycloak JWT with `aud` = `svc-pay-recurring-mandates`; DPoP (RFC 9449) enforced on `/open-finance/v1/vrp/**`: DPoP scheme, `cnf.jkt`-bound token, fresh proof per request (jti replay table); plain Bearer is 401. `DPOP_REQUIRED` (default `true`) |
 
 ### Ownership tags
 

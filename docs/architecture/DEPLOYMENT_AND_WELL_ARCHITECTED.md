@@ -35,7 +35,7 @@ TPP ─▶ Istio ingress ─▶ payment-recurring-mandates-service pods (EKS, ns
 ## Known gaps
 
 - No repository serves the accounts API yet; `ACCOUNTS_SERVICE_BASE_URL` is required by the chart and must point at the system of record. Mandates without a debtor account skip the check.
-- DPoP proofs are required as a header by the FAPI contract but not validated (platform decision 2026-10-08 for lending and payments). VRP is TPP-facing; revisit with the open-finance squad.
+- DPoP is enforced on the TPP-facing VRP API (platform contract: DPoP applies by caller): DPoP scheme, `cnf.jkt`-bound token, proof signature/htm/htu/iat/ath checks and a single-use jti in PostgreSQL (`dpop_proof_jti`, purged every 10 minutes). Plain Bearer is 401. Internal callers, if any appear, get `/api/v1` paths with Bearer.
 - The read cache (`InMemoryVrpCacheAdapter`) is per pod: a GET on another replica may show a mandate as Authorised for up to 30 s after revocation. Collections always read the database.
 - Kafka topics and ACLs for `evt.pay.mandate.*.v1` are not yet in the platform topic catalog; the relay is off until they are.
 - `msk-client-access` is not on the terraform-modules main branch; an inline topic-scoped IAM policy is used (TODO in `main.tf`).

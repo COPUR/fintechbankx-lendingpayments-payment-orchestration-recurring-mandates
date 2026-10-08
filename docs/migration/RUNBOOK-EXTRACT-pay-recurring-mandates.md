@@ -10,9 +10,9 @@ steps of `fbx-monolith-extraction`. Status: **Proposed**.
 |---|---|
 | Context / service | `pay` / `svc-pay-recurring-mandates` (Helm/SA `payment-recurring-mandates-service`, namespace `payments`) |
 | Slice | Mandate aggregate (`VrpConsent`): authorise, read, revoke; collections (`VrpPayment`) under its monthly limit |
-| Owned data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event` |
+| Owned data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` (DPoP replay cache) |
 | Events | `evt.pay.mandate.created.v1`, `evt.pay.mandate.revoked.v1`, `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.{Created,Revoked,PaymentAccepted}.v1`), DLQ `evt.pay.mandate.dlq.v1`; contract `api/asyncapi/svc-pay-recurring-mandates.yaml` (catalog PR pending) |
-| Depends on | Keycloak realm `fintechbankx` (TPP tokens with `aud` = service id; client-credentials client `svc-pay-recurring-mandates`); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` for the optional debtor account |
+| Depends on | Keycloak realm `fintechbankx` (TPP tokens with `aud` = service id and DPoP binding `cnf.jkt`, so TPP clients must be DPoP-enabled before cutover; client-credentials client `svc-pay-recurring-mandates`); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` for the optional debtor account |
 
 ## 1. Data ownership split
 
@@ -47,7 +47,7 @@ Consequences:
 
 Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
 `/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; `outbox_parked_events`
-above 0; `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
+above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
 
 ## 3. Acceptance checklist
 

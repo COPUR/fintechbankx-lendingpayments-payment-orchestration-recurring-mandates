@@ -13,7 +13,7 @@ The paths are unchanged, so cutover is a routing change at the ingress gateway
 
 | Monolith (method, path, handler) | New service | Field changes | Status code changes |
 |---|---|---|---|
-| `POST /open-finance/v1/vrp/payment-consents` (`createConsent`) | same path, `RecurringPaymentController.createConsent` | optional `Data.DebtorAccount.Identification` added; `Limit.Currency` upper-cased | 401 without a valid token; 400 if `ExpiryDateTime` is not in the future, if the amount has more decimals than the currency allows or the currency is unknown; 400 if the debtor account is not active, not debitable or in another currency; 503 if the accounts API is unreachable |
+| `POST /open-finance/v1/vrp/payment-consents` (`createConsent`) | same path, `RecurringPaymentController.createConsent` | optional `Data.DebtorAccount.Identification` added; `Limit.Currency` upper-cased | 401 without a valid DPoP-bound token and proof; 400 if `ExpiryDateTime` is not in the future, if the amount has more decimals than the currency allows or the currency is unknown; 400 if the debtor account is not active, not debitable or in another currency; 503 if the accounts API is unreachable |
 | `GET /open-finance/v1/vrp/payment-consents/{consentId}` (`getConsent`) | same | none | 401 without a valid token; 403 for another TPP (unchanged); `If-None-Match` 304 is computed from current state, so a revoked mandate no longer returns a stale 304 |
 | `DELETE /open-finance/v1/vrp/payment-consents/{consentId}?reason=` (`revokeConsent`) | same | none | 401 without a valid token; 409 `CONCURRENT_UPDATE` if a concurrent change wins; second revoke stays 204 and raises no event |
 | `POST /open-finance/v1/vrp/payments` (`submitPayment`) | same | none | 401 without a valid token; 400 for extra decimals or a debtor account that cannot be debited; 503 if the accounts API is unreachable; 409 `CONCURRENT_UPDATE` |
@@ -28,7 +28,7 @@ monolith (caught by its `Exception` handler); they are now 400 `INVALID_REQUEST`
 | Area | Monolith | New service |
 |---|---|---|
 | TPP identity | `x-fapi-financial-id` header, `UNKNOWN_TPP` when absent; any `Bearer`/`DPoP` string accepted | Validated JWT (issuer, signature, `aud` must contain `svc-pay-recurring-mandates`); TPP = `azp` (else `client_id`); a different `x-fapi-financial-id` is 403 |
-| DPoP | header required, not validated | header still required, still not validated (documented in OpenAPI) |
+| DPoP | header required, not validated; `Bearer` scheme accepted | enforced (RFC 9449): `DPoP` scheme, token bound by `cnf.jkt`, proof verified (signature with its jwk, `htm`, `htu`, `iat` within 5 min, `ath`) and its `jti` single-use across pods (`dpop_proof_jti`); a plain `Bearer` token or a missing, replayed or mismatching proof is 401 `WWW-Authenticate: DPoP error="invalid_dpop_proof"` |
 | Persistence | in-memory only; lost on restart; per-pod state | PostgreSQL `sc_pay_recurring_mandates`; shared by all pods |
 | Concurrency | JVM lock per pod | PostgreSQL advisory lock per mandate plus version compare-and-set |
 | Idempotency | in-memory per pod | `mandate_idempotency_record`, unique per TPP and key, claimed atomically; TTL 24 h |
