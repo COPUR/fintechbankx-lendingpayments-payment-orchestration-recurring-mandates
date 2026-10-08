@@ -110,6 +110,18 @@ class PsuConsentTest {
     }
 
     @Test
+    @DisplayName("a collection is refused once the consent no longer grants INITIATEVRP")
+    void collectionsReCheckTheVrpScope() {
+        VrpConsent mandate = VrpConsent.authorise(consent(true, "TPP-001", Set.of("ACC-1")),
+                request("TPP-001", null, null, null), NOW).mandate();
+        PsuConsent narrowed = new PsuConsent("CONS-AUTH-1", "TPP-001", "PSU-001", Set.of("READACCOUNTS"),
+                Set.of("ACC-1"), CONSENT_EXPIRY, true);
+
+        assertThatThrownBy(() -> narrowed.ensureAuthorises(mandate, NOW))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent does not grant INITIATEVRP");
+    }
+
+    @Test
     @DisplayName("scopes compare case-insensitively and blank ids are refused")
     void normalisesAndValidates() {
         PsuConsent consent = new PsuConsent(" CONS-AUTH-1 ", "TPP-001", "PSU-001", Set.of("initiatevrp"),

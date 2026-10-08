@@ -57,9 +57,6 @@ public record PsuConsent(
      */
     public MandateTerms termsFor(CreateVrpConsentCommand command, Instant now) {
         ensureUsableBy(command.tppId(), now);
-        if (!scopes.contains(VRP_SCOPE)) {
-            throw new ForbiddenException("Consent does not grant " + VRP_SCOPE);
-        }
         if (command.psuId() != null && !command.psuId().equals(customerId)) {
             throw new ForbiddenException("PsuId does not match the consent");
         }
@@ -78,12 +75,19 @@ public record PsuConsent(
         }
     }
 
+    /**
+     * Shared by mandate creation and every collection: the PSU authorised the
+     * consent, it has not expired, it is this TPP's and it grants VRP.
+     */
     private void ensureUsableBy(String tppId, Instant now) {
         if (!usable || !expiresAt.isAfter(now)) {
             throw new ForbiddenException("Consent is not authorised by the PSU");
         }
         if (!participantId.equals(tppId)) {
             throw new ForbiddenException("Consent belongs to another TPP");
+        }
+        if (!scopes.contains(VRP_SCOPE)) {
+            throw new ForbiddenException("Consent does not grant " + VRP_SCOPE);
         }
     }
 
