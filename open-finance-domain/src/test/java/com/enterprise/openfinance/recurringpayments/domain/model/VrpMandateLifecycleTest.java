@@ -175,13 +175,15 @@ class VrpMandateLifecycleTest {
     @Test
     void debtorAccountMustBeActiveDebitableAndInTheMandateCurrency() {
         new DebtorAccount("ACC-001", true, true, "AED").ensureDebitableIn("AED");
+        // One message for every reason, so a caller cannot tell an inactive account from another failure.
+        assertThat(DebtorAccount.NOT_USABLE).isEqualTo("DebtorAccount cannot be used for this mandate");
 
         assertThatThrownBy(() -> new DebtorAccount("ACC-001", false, true, "AED").ensureDebitableIn("AED"))
-                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account is not active");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
         assertThatThrownBy(() -> new DebtorAccount("ACC-001", true, false, "AED").ensureDebitableIn("AED"))
-                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account does not allow debits");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
         assertThatThrownBy(() -> new DebtorAccount("ACC-001", true, true, "USD").ensureDebitableIn("AED"))
-                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account currency mismatch");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
     }
 
     @Test

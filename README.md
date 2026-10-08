@@ -68,8 +68,11 @@ callee ALLOW rules) is in the runbook, "Requests to the mesh team".
 `POST /payment-consents` takes `Data.ConsentId`, a consent the PSU authorised in
 consent-authorization-service (`usable` = true, participant = the calling TPP, scope
 `INITIATEVRP`). The mandate takes that consent's id, PSU and debtor account; the TPP
-supplies only the monthly limit. A stated `PsuId`, `DebtorAccount` or later
-`ExpiryDateTime` that differs from the consent is 403; a missing or unusable consent
+supplies only the monthly limit. A stated `PsuId` or later `ExpiryDateTime` that
+differs from the consent is 403; a `DebtorAccount` outside the consent, unknown to the
+accounts API or not usable (inactive, no debits, other currency) is always the same 400
+`DebtorAccount cannot be used for this mandate`, so the API does not reveal whether an
+account exists or whose it is; a missing or unusable consent
 is 403; a second mandate for one consent is 409; consent service down is 503. Every
 collection re-reads the consent, so a PSU who withdraws it stops further collections.
 All remote calls run before the database transaction and the mandate lock.

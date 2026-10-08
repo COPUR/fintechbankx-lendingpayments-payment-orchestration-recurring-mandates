@@ -9,6 +9,18 @@ import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRul
  */
 public record DebtorAccount(String accountId, boolean active, boolean debitAllowed, String currency) {
 
+    /**
+     * The one answer for every debtor account a mandate cannot use: unknown,
+     * outside the PSU's consent, inactive, not debitable or in another
+     * currency. A single message (and a single 400) means a caller cannot use
+     * the API to learn whether an account exists or whose it is.
+     */
+    public static final String NOT_USABLE = "DebtorAccount cannot be used for this mandate";
+
+    public static BusinessRuleViolationException notUsable() {
+        return new BusinessRuleViolationException(NOT_USABLE);
+    }
+
     public DebtorAccount {
         if (accountId == null || accountId.isBlank()) {
             throw new IllegalArgumentException("accountId is required");
@@ -16,14 +28,8 @@ public record DebtorAccount(String accountId, boolean active, boolean debitAllow
     }
 
     public void ensureDebitableIn(String mandateCurrency) {
-        if (!active) {
-            throw new BusinessRuleViolationException("Debtor account is not active");
-        }
-        if (!debitAllowed) {
-            throw new BusinessRuleViolationException("Debtor account does not allow debits");
-        }
-        if (currency == null || !currency.equalsIgnoreCase(mandateCurrency)) {
-            throw new BusinessRuleViolationException("Debtor account currency mismatch");
+        if (!active || !debitAllowed || currency == null || !currency.equalsIgnoreCase(mandateCurrency)) {
+            throw notUsable();
         }
     }
 }

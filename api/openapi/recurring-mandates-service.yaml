@@ -197,8 +197,10 @@ components:
           description: >-
             A mandate is created only under a consent the PSU authorised in
             consent-authorization-service. The mandate takes that consent's id,
-            PSU and debtor account; the TPP supplies the monthly limit. Values
-            stated here that differ from the consent are refused with 403.
+            PSU and debtor account; the TPP supplies the monthly limit. A PsuId
+            or later ExpiryDateTime that differs from the consent is refused
+            with 403; a DebtorAccount problem is always the same 400 (see
+            DebtorAccount).
           required: [ConsentId, Limit]
           properties:
             ConsentId:
@@ -231,7 +233,11 @@ components:
                 Optional when the consent covers exactly one account; otherwise
                 required and one of the consent's accounts. Checked with the
                 accounts service (active, debits allowed, same currency) at
-                creation and before every collection.
+                creation and before every collection. An account outside the
+                consent, an unknown account and an unusable one all get the
+                same 400 BUSINESS_RULE_VIOLATION "DebtorAccount cannot be used
+                for this mandate", so the API reveals neither whether an
+                account exists nor whose it is.
               required: [Identification]
               properties:
                 Identification:

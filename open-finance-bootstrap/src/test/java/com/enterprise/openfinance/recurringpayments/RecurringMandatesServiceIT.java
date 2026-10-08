@@ -240,10 +240,41 @@ class RecurringMandatesServiceIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(consentJson(psuConsent(true, "ACC-AED-BLOCKED"), "5000.00", "ACC-AED-BLOCKED")))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Debtor account is not active"));
+                .andExpect(jsonPath("$.message").value("DebtorAccount cannot be used for this mandate"));
 
         assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_record", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_outbox_event", Integer.class)).isZero();
+    }
+
+    /**
+     * No account enumeration: an account the PSU did not put in the consent (not
+     * theirs to use) and an account the accounts API does not know get the same
+     * status and the same body, and neither creates anything.
+     */
+    @Test
+    void anUnknownAccountAndAnAccountOutsideTheConsentGetTheSame400() throws Exception {
+        MvcResult notOwned = mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson(psuConsent(true, "ACC-AED-ACTIVE"), "5000.00", "ACC-SOMEONE-ELSES")))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+        MvcResult unknown = mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson(psuConsent(true, "ACC-DOES-NOT-EXIST"), "5000.00", "ACC-DOES-NOT-EXIST")))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+
+        com.fasterxml.jackson.databind.node.ObjectNode unknownBody =
+                (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(unknown.getResponse().getContentAsString());
+        com.fasterxml.jackson.databind.node.ObjectNode notOwnedBody =
+                (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(notOwned.getResponse().getContentAsString());
+        unknownBody.remove("timestamp");
+        notOwnedBody.remove("timestamp");
+        assertThat(unknownBody).as("same code, message and fields; only the timestamp differs").isEqualTo(notOwnedBody);
+        assertThat(json.readTree(unknown.getResponse().getContentAsString()).get("message").asText())
+                .isEqualTo("DebtorAccount cannot be used for this mandate");
+        assertThat(unknown.getResponse().getContentAsString()).doesNotContain("ACC-");
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_record", Integer.class)).isZero();
     }
 
     @Test

@@ -455,15 +455,15 @@ class RecurringPaymentServiceTest {
         assertThat(linked.debtorAccountId()).isEqualTo("ACC-ACTIVE");
 
         assertThatThrownBy(() -> service.createConsent(consentCommand("ACC-UNKNOWN")))
-                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account not found");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
         assertThatThrownBy(() -> service.createConsent(consentCommand("ACC-BLOCKED")))
-                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account is not active");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
 
         // The account is blocked after the mandate was set up: the next collection is refused.
         accounts.accounts.put("ACC-ACTIVE", new DebtorAccount("ACC-ACTIVE", true, false, "AED"));
         assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", linked.consentId(),
                 "IDEMP-DA-1", new BigDecimal("10.00"), "AED", "ix-da")))
-                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account does not allow debits");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
         assertThat(events.published).hasSize(1);
     }
 
@@ -534,7 +534,7 @@ class RecurringPaymentServiceTest {
         assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-X", "PSU-SOMEONE-ELSE", "ACC-DEFAULT")))
                 .isInstanceOf(ForbiddenException.class).hasMessage("PsuId does not match the consent");
         assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-Y", null, "ACC-NOT-IN-CONSENT")))
-                .isInstanceOf(ForbiddenException.class).hasMessage("DebtorAccount is not covered by the consent");
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
 
         assertThat(mandates.data).isEmpty();
         assertThat(events.published).isEmpty();

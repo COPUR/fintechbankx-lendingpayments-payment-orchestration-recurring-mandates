@@ -3,7 +3,6 @@ package com.enterprise.openfinance.recurringpayments.application;
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
-import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
@@ -255,7 +254,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
 
     private void verifyDebtorAccount(String debtorAccountId, String currency) {
         DebtorAccount account = debtorAccountPort.findDebtorAccount(debtorAccountId)
-                .orElseThrow(() -> new BusinessRuleViolationException("Debtor account not found"));
+                .orElseThrow(DebtorAccount::notUsable); // same answer as an account outside the consent
         account.ensureDebitableIn(currency);
     }
 

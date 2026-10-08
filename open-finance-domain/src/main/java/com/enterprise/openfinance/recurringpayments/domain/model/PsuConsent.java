@@ -90,7 +90,7 @@ public record PsuConsent(
     private String debtorAccount(String requested) {
         if (requested != null) {
             if (!accountIds.contains(requested)) {
-                throw new ForbiddenException("DebtorAccount is not covered by the consent");
+                throw DebtorAccount.notUsable(); // same answer as an unknown account: no enumeration
             }
             return requested;
         }

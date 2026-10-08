@@ -66,7 +66,9 @@ class PsuConsentTest {
     void requestCannotWidenTheConsent() {
         PsuConsent consent = consent(true, "TPP-001", Set.of("ACC-1"));
         assertForbidden(consent, request("TPP-001", "PSU-999", null, null), "PsuId does not match the consent");
-        assertForbidden(consent, request("TPP-001", null, "ACC-999", null), "DebtorAccount is not covered by the consent");
+        // An account outside the consent gets the same 400 as an unknown or unusable account (no enumeration).
+        assertThatThrownBy(() -> consent.termsFor(request("TPP-001", null, "ACC-999", null), NOW))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
         assertForbidden(consent, request("TPP-001", null, null, CONSENT_EXPIRY.plusSeconds(1)),
                 "ExpiryDateTime is after the consent expiry");
         assertForbidden(consent(true, "TPP-001", Set.of()), request("TPP-001", null, null, null),
