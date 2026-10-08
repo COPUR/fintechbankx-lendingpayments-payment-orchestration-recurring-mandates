@@ -2,6 +2,8 @@ package com.enterprise.openfinance.recurringpayments.domain.model;
 
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 
 import java.time.Instant;
@@ -77,17 +79,21 @@ public record PsuConsent(
 
     /**
      * Shared by mandate creation and every collection: the PSU authorised the
-     * consent, it has not expired, it is this TPP's and it grants VRP.
+     * consent, it has not expired, it is this TPP's and it grants VRP. Every
+     * refusal is the same {@link ConsentNotUsableException}; only its reason differs.
      */
     private void ensureUsableBy(String tppId, Instant now) {
-        if (!usable || !expiresAt.isAfter(now)) {
-            throw new ForbiddenException("Consent is not authorised by the PSU");
+        if (!usable) {
+            throw new ConsentNotUsableException(Reason.NOT_AUTHORISED);
+        }
+        if (!expiresAt.isAfter(now)) {
+            throw new ConsentNotUsableException(Reason.EXPIRED);
         }
         if (!participantId.equals(tppId)) {
-            throw new ForbiddenException("Consent belongs to another TPP");
+            throw new ConsentNotUsableException(Reason.OTHER_TPP);
         }
         if (!scopes.contains(VRP_SCOPE)) {
-            throw new ForbiddenException("Consent does not grant " + VRP_SCOPE);
+            throw new ConsentNotUsableException(Reason.MISSING_SCOPE);
         }
     }
 

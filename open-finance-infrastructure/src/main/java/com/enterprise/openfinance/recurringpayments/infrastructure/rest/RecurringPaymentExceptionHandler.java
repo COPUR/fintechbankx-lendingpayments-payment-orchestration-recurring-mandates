@@ -1,6 +1,7 @@
 package com.enterprise.openfinance.recurringpayments.infrastructure.rest;
 
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
@@ -25,6 +26,19 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 public class RecurringPaymentExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RecurringPaymentExceptionHandler.class);
+
+    /**
+     * One body for every consent the caller may not use; the reason goes to the
+     * log only, with the interaction id so support can trace a TPP's complaint.
+     */
+    @ExceptionHandler(ConsentNotUsableException.class)
+    public ResponseEntity<VrpErrorResponse> handleConsentNotUsable(ConsentNotUsableException exception,
+                                                                   HttpServletRequest request) {
+        String interactionId = interactionId(request);
+        log.info("Consent refused: reason={} interactionId={}", exception.reason(), interactionId);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(VrpErrorResponse.of("FORBIDDEN", ConsentNotUsableException.MESSAGE, interactionId));
+    }
 
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<VrpErrorResponse> handleForbidden(ForbiddenException exception,

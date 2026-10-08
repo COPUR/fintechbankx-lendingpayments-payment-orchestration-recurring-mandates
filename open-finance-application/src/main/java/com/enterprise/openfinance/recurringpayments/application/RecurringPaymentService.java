@@ -3,6 +3,7 @@ package com.enterprise.openfinance.recurringpayments.application;
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
@@ -260,7 +261,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
 
     private PsuConsent loadPsuConsent(String consentId) {
         return psuConsentPort.findConsent(consentId)
-                .orElseThrow(() -> new ForbiddenException("Consent not found or not authorised"));
+                .orElseThrow(() -> new ConsentNotUsableException(ConsentNotUsableException.Reason.NOT_FOUND));
     }
 
     private VrpConsent loadConsent(String consentId) {

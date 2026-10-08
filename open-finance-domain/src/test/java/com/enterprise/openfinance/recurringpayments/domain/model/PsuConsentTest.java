@@ -2,6 +2,8 @@ package com.enterprise.openfinance.recurringpayments.domain.model;
 
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,18 +49,16 @@ class PsuConsentTest {
     }
 
     @Test
-    @DisplayName("an unusable or lapsed consent, another TPP's consent or one without INITIATEVRP is refused")
+    @DisplayName("an unusable or lapsed consent, another TPP's consent or one without INITIATEVRP gets one answer")
     void unusableForeignOrOutOfScopeConsentIsRefused() {
-        assertForbidden(consent(false, "TPP-001", Set.of("ACC-1")), request("TPP-001", null, null, null),
-                "Consent is not authorised by the PSU");
+        assertNotUsable(consent(false, "TPP-001", Set.of("ACC-1")), Reason.NOT_AUTHORISED);
         PsuConsent lapsed = new PsuConsent("CONS-AUTH-1", "TPP-001", "PSU-001", Set.of("INITIATEVRP"), Set.of("ACC-1"),
                 NOW, true);
-        assertForbidden(lapsed, request("TPP-001", null, null, null), "Consent is not authorised by the PSU");
-        assertForbidden(consent(true, "TPP-OTHER", Set.of("ACC-1")), request("TPP-001", null, null, null),
-                "Consent belongs to another TPP");
+        assertNotUsable(lapsed, Reason.EXPIRED);
+        assertNotUsable(consent(true, "TPP-OTHER", Set.of("ACC-1")), Reason.OTHER_TPP);
         PsuConsent aisOnly = new PsuConsent("CONS-AUTH-1", "TPP-001", "PSU-001", Set.of("READACCOUNTS"),
                 Set.of("ACC-1"), CONSENT_EXPIRY, true);
-        assertForbidden(aisOnly, request("TPP-001", null, null, null), "Consent does not grant INITIATEVRP");
+        assertNotUsable(aisOnly, Reason.MISSING_SCOPE);
     }
 
     @Test
@@ -102,11 +102,13 @@ class PsuConsentTest {
 
         consent(true, "TPP-001", Set.of("ACC-1")).ensureAuthorises(mandate, NOW);
         assertThatThrownBy(() -> consent(false, "TPP-001", Set.of("ACC-1")).ensureAuthorises(mandate, NOW))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent is not authorised by the PSU");
+                .isInstanceOf(ConsentNotUsableException.class).hasMessage(ConsentNotUsableException.MESSAGE)
+                .extracting("reason").isEqualTo(Reason.NOT_AUTHORISED);
         assertThatThrownBy(() -> consent(true, "TPP-001", Set.of("ACC-2")).ensureAuthorises(mandate, NOW))
                 .isInstanceOf(ForbiddenException.class).hasMessage("DebtorAccount is not covered by the consent");
         assertThatThrownBy(() -> consent(true, "TPP-OTHER", Set.of("ACC-1")).ensureAuthorises(mandate, NOW))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent belongs to another TPP");
+                .isInstanceOf(ConsentNotUsableException.class).hasMessage(ConsentNotUsableException.MESSAGE)
+                .extracting("reason").isEqualTo(Reason.OTHER_TPP);
     }
 
     @Test
@@ -118,7 +120,8 @@ class PsuConsentTest {
                 Set.of("ACC-1"), CONSENT_EXPIRY, true);
 
         assertThatThrownBy(() -> narrowed.ensureAuthorises(mandate, NOW))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent does not grant INITIATEVRP");
+                .isInstanceOf(ConsentNotUsableException.class).hasMessage(ConsentNotUsableException.MESSAGE)
+                .extracting("reason").isEqualTo(Reason.MISSING_SCOPE);
     }
 
     @Test
@@ -136,6 +139,13 @@ class PsuConsentTest {
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("customerId");
         assertThatThrownBy(() -> new PsuConsent("C", "T", "P", Set.of(), Set.of(), null, true))
                 .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("expiresAt");
+    }
+
+    private static void assertNotUsable(PsuConsent consent, Reason reason) {
+        assertThatThrownBy(() -> consent.termsFor(request("TPP-001", null, null, null), NOW))
+                .isInstanceOf(ConsentNotUsableException.class)
+                .hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(reason);
     }
 
     private static void assertForbidden(PsuConsent consent, CreateVrpConsentCommand command, String message) {

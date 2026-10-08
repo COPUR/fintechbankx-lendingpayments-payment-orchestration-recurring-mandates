@@ -526,11 +526,14 @@ class RecurringPaymentServiceTest {
                 new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort(), consents);
 
         assertThatThrownBy(() -> service.createConsent(command("MISSING-1", null, null)))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent not found or not authorised");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.NOT_FOUND);
         assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-PENDING", null, null)))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent is not authorised by the PSU");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.NOT_AUTHORISED);
         assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-OTHER-TPP", null, null)))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent belongs to another TPP");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.OTHER_TPP);
         assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-X", "PSU-SOMEONE-ELSE", "ACC-DEFAULT")))
                 .isInstanceOf(ForbiddenException.class).hasMessage("PsuId does not match the consent");
         assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-Y", null, "ACC-NOT-IN-CONSENT")))
@@ -566,7 +569,8 @@ class RecurringPaymentServiceTest {
 
         assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", mandate.consentId(),
                 "IDEMP-WD-1", new BigDecimal("10.00"), "AED", "ix-wd")))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent is not authorised by the PSU");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.NOT_AUTHORISED);
         assertThat(events.published).hasSize(1);
     }
 

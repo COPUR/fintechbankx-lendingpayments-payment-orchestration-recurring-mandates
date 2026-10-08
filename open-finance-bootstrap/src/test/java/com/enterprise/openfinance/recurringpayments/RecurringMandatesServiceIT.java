@@ -71,6 +71,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "management.tracing.enabled=false"
 })
 @AutoConfigureMockMvc
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class RecurringMandatesServiceIT {
 
     private static final String SCHEMA = "sc_pay_recurring_mandates";
@@ -550,7 +551,7 @@ class RecurringMandatesServiceIT {
         mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents")).contentType(MediaType.APPLICATION_JSON)
                         .content(consentJson(psuConsent(false, "ACC-AED-ACTIVE"), "5000.00", null)))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.message").value("Consent is not authorised by the PSU"));
+                .andExpect(jsonPath("$.message").value("Consent not found or not authorised"));
         mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents")).contentType(MediaType.APPLICATION_JSON)
                         .content(consentJson(psuConsent(true, "ACC-AED-ACTIVE"), "5000.00", null)
                                 .replace("PSU-001", "PSU-SOMEONE-ELSE")))
@@ -565,6 +566,57 @@ class RecurringMandatesServiceIT {
         assertThat(results).extracting(r -> r.getResponse().getStatus()).containsExactlyInAnyOrder(201, 409);
         assertThat(jdbc.queryForObject("select consent_id from " + SCHEMA + ".mandate_record", String.class))
                 .isEqualTo(consentId);
+    }
+
+    @Test
+    void everyConsentTheCallerMayNotUseGetsOneForbiddenBodyAndTheReasonOnlyInTheLog(
+            org.springframework.boot.test.system.CapturedOutput log) throws Exception {
+        Instant future = Instant.parse("2099-06-01T00:00:00Z");
+        java.util.Map<String, String> refusals = new java.util.LinkedHashMap<>();
+        refusals.put("CONS-UNKNOWN", "NOT_FOUND");
+        refusals.put(putPsuConsent(TPP, java.util.Set.of("INITIATEVRP"), future, false), "NOT_AUTHORISED");
+        refusals.put(putPsuConsent(TPP, java.util.Set.of("INITIATEVRP"), Instant.parse("2020-01-01T00:00:00Z"), true),
+                "EXPIRED");
+        refusals.put(putPsuConsent("TPP-OTHER", java.util.Set.of("INITIATEVRP"), future, true), "OTHER_TPP");
+        refusals.put(putPsuConsent(TPP, java.util.Set.of("READACCOUNTS"), future, true), "MISSING_SCOPE");
+
+        List<String> bodies = new ArrayList<>();
+        for (var refusal : refusals.entrySet()) {
+            String interactionId = "it-refusal-" + refusal.getValue();
+            MvcResult result = mvc.perform(post("/open-finance/v1/vrp/payment-consents")
+                            .with(ItDpop.dpop("DPoP", "tok-" + TPP))
+                            .header("x-fapi-interaction-id", interactionId)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(consentJson(refusal.getKey(), "5000.00", null)))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                    .andExpect(jsonPath("$.message").value("Consent not found or not authorised"))
+                    .andReturn();
+            com.fasterxml.jackson.databind.node.ObjectNode body =
+                    (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
+            assertThat(body.remove("interactionId").asText()).isEqualTo(interactionId);
+            body.remove("timestamp");
+            bodies.add(body.toString());
+            assertThat(log.getOut()).contains("reason=" + refusal.getValue() + " interactionId=" + interactionId);
+        }
+        assertThat(bodies).hasSize(5).containsOnly(bodies.get(0));
+        assertThat(String.join("", bodies)).doesNotContain("PSU", "TPP", "INITIATEVRP", "expired", "another");
+
+        // The per-collection re-check gives the same answer once the PSU withdraws the consent.
+        String consentId = createConsent("5000.00", null);
+        psuConsents.computeIfPresent(consentId, (id, c) -> new com.enterprise.openfinance.recurringpayments.domain.model
+                .PsuConsent(id, c.participantId(), c.customerId(), c.scopes(), c.accountIds(), c.expiresAt(), false));
+        mvc.perform(paymentRequest(consentId, "IDEMP-REFUSED-1", "10.00", TPP))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Consent not found or not authorised"));
+        assertThat(log.getOut()).contains("reason=NOT_AUTHORISED interactionId=it-interaction-1");
+    }
+
+    private String putPsuConsent(String participant, java.util.Set<String> scopes, Instant expiry, boolean usable) {
+        String id = "CONS-AUTH-" + consentIds.incrementAndGet();
+        psuConsents.put(id, new com.enterprise.openfinance.recurringpayments.domain.model.PsuConsent(id, participant,
+                "PSU-001", scopes, java.util.Set.of("ACC-AED-ACTIVE"), expiry, usable));
+        return id;
     }
 
     @Test
