@@ -66,6 +66,20 @@ is 403; a second mandate for one consent is 409; consent service down is 503. Ev
 collection re-reads the consent, so a PSU who withdraws it stops further collections.
 All remote calls run before the database transaction and the mandate lock.
 
+### Limit rule and its scope
+
+A mandate has one cumulative monthly limit, as in the monolith: the accepted total
+per calendar month may not exceed `Limit.Amount`. The month is the calendar month in
+`mandates.limit-period-zone` (env `MANDATES_LIMIT_PERIOD_ZONE`, default `Asia/Dubai`),
+so a collection at 20:30Z on 28 February counts against March. Changing the zone
+moves period boundaries for existing mandates; agree it with the squad first.
+
+Follow-up, not in scope (the monolith has none of these): the UAE VRP control
+parameters also define a per-payment maximum, per-period limits for Day, Week,
+Fortnight, Month, HalfYear and Year, a total over the consent lifetime and payment
+count limits. Adding them needs the consent view to expose the PSU-authorised
+control parameters (today the limit is asserted by the TPP).
+
 ### Removed from this repository and who owns it
 
 The seed copied generic open-finance code that was never compiled here

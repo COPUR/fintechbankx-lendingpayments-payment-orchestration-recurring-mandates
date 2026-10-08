@@ -743,6 +743,28 @@ class RecurringPaymentServiceTest {
         );
     }
 
+    @Test
+    void theMonthlyLimitResetsAtMidnightInTheConfiguredZone() {
+        // 2026-02-28T20:30Z is already 1 March in Dubai: February's spend does not count.
+        Clock lateFebruaryUtc = Clock.fixed(Instant.parse("2026-02-28T20:30:00Z"), ZoneOffset.UTC);
+        TestPaymentPort paymentPort = new TestPaymentPort();
+        RecurringPaymentService dubai = new RecurringPaymentService(new TestConsentPort(), paymentPort,
+                new TestIdempotencyPort(), new TestCachePort(), new TestLockPort(), new RecordingEventPublisher(),
+                new TestDebtorAccountPort(), new TestPsuConsentPort(), TRANSACTIONS,
+                new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30), java.time.ZoneId.of("Asia/Dubai")),
+                lateFebruaryUtc);
+        VrpConsent consent = createConsent(dubai);
+        paymentPort.save(new VrpPayment("PAY-FEB", consent.consentId(), "TPP-001", "IDEMP-FEB",
+                new BigDecimal("5000.00"), "AED", "2026-02", VrpPaymentStatus.ACCEPTED,
+                Instant.parse("2026-02-27T10:00:00Z")));
+
+        VrpCollectionResult result = dubai.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-MAR", new BigDecimal("100.00"), "AED", "ix-mar"));
+
+        assertThat(result.status()).isEqualTo(VrpPaymentStatus.ACCEPTED);
+        assertThat(paymentPort.findById(result.paymentId()).orElseThrow().periodKey()).isEqualTo("2026-03");
+    }
+
     private static final class TestConsentPort implements VrpConsentPort {
         private final Map<String, VrpConsent> data = new ConcurrentHashMap<>();
 

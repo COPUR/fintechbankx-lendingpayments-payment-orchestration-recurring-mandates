@@ -11,7 +11,7 @@ import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenEx
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -21,7 +21,8 @@ import java.util.UUID;
  * raised. version is the optimistic-concurrency token the persistence adapter
  * compares on save.
  *
- * Limit rule: the accepted total per UTC calendar month may not exceed the limit.
+ * Limit rule: the accepted total per calendar month in the limit-period zone
+ * (Asia/Dubai by default) may not exceed the limit.
  */
 public record VrpConsent(
         String consentId,
@@ -135,8 +136,12 @@ public record VrpConsent(
         return limit.currencyCode();
     }
 
-    public static String periodKeyOf(Instant at) {
-        return YearMonth.from(at.atZone(ZoneOffset.UTC)).toString();
+    /** UAE mandates count their monthly limit in local (Gulf Standard) time. */
+    public static final ZoneId DEFAULT_LIMIT_PERIOD_ZONE = ZoneId.of("Asia/Dubai");
+
+    /** The limit period is the calendar month of {@code at} in {@code zone}, e.g. "2026-03". */
+    public static String periodKeyOf(Instant at, ZoneId zone) {
+        return YearMonth.from(at.atZone(zone)).toString();
     }
 
     public boolean belongsToTpp(String candidateTppId) {
@@ -187,11 +192,13 @@ public record VrpConsent(
      * total including this amount stays within the limit.
      *
      * @param acceptedInPeriod total already accepted under this mandate in the period of {@code now}
+     * @param periodZone       zone whose calendar month is the limit period
      */
     public PaymentAuthorisation authorisePayment(String paymentId,
                                                  SubmitVrpPaymentCommand command,
                                                  BigDecimal acceptedInPeriod,
-                                                 Instant now) {
+                                                 Instant now,
+                                                 ZoneId periodZone) {
         ensureCanCollect(command, now);
         Money instructed = Money.of(command.amount(), limit.currencyCode());
         Money periodTotal = Money.of(acceptedInPeriod, limit.currencyCode()).plus(instructed);
@@ -199,7 +206,7 @@ public record VrpConsent(
             throw new BusinessRuleViolationException("Limit Exceeded");
         }
 
-        String periodKey = periodKeyOf(now);
+        String periodKey = periodKeyOf(now, periodZone);
         VrpPayment payment = new VrpPayment(paymentId, consentId, command.tppId(), command.idempotencyKey(),
                 instructed, periodKey, VrpPaymentStatus.ACCEPTED, now);
         VrpConsent next = new VrpConsent(consentId, tppId, psuId, limit, status, expiresAt,
@@ -210,6 +217,14 @@ public record VrpConsent(
         return new PaymentAuthorisation(next, payment, event);
     }
 
+
+    /** Collection in the default (Asia/Dubai) limit period. */
+    public PaymentAuthorisation authorisePayment(String paymentId,
+                                                 SubmitVrpPaymentCommand command,
+                                                 BigDecimal acceptedInPeriod,
+                                                 Instant now) {
+        return authorisePayment(paymentId, command, acceptedInPeriod, now, DEFAULT_LIMIT_PERIOD_ZONE);
+    }
 
     private static boolean isBlank(String value) {
         return value == null || value.isBlank();

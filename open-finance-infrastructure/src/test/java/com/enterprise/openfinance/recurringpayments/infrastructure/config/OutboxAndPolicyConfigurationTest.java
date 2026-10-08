@@ -72,10 +72,11 @@ class OutboxAndPolicyConfigurationTest {
         cache.setMaxEntries(5);
         RecurringPaymentsConfiguration configuration = new RecurringPaymentsConfiguration();
 
-        VrpSettings settings = configuration.vrpSettings(policy, cache);
+        VrpSettings settings = configuration.vrpSettings(policy, cache, java.time.ZoneId.of("Asia/Dubai"));
 
         assertThat(settings.idempotencyTtl()).isEqualTo(Duration.ofHours(12));
         assertThat(settings.cacheTtl()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(settings.limitPeriodZone()).isEqualTo(java.time.ZoneId.of("Asia/Dubai"));
         assertThat(cache.getMaxEntries()).isEqualTo(5);
         assertThat(policy.getIdempotencyTtl()).isEqualTo(Duration.ofHours(12));
         assertThat(configuration.vrpClock().getZone()).isEqualTo(ZoneOffset.UTC);

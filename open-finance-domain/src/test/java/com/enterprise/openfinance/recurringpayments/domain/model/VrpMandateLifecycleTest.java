@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -127,9 +129,27 @@ class VrpMandateLifecycleTest {
     }
 
     @Test
-    void periodIsTheUtcCalendarMonth() {
-        assertThat(VrpConsent.periodKeyOf(Instant.parse("2026-02-28T23:59:59Z"))).isEqualTo("2026-02");
-        assertThat(VrpConsent.periodKeyOf(Instant.parse("2026-03-01T00:00:00Z"))).isEqualTo("2026-03");
+    void periodIsTheCalendarMonthInTheConfiguredZoneDubaiByDefault() {
+        ZoneId dubai = ZoneId.of("Asia/Dubai");
+        assertThat(VrpConsent.DEFAULT_LIMIT_PERIOD_ZONE).isEqualTo(dubai);
+        // 20:00Z on 28 February is 00:00 on 1 March in Dubai (UTC+4).
+        assertThat(VrpConsent.periodKeyOf(Instant.parse("2026-02-28T19:59:59Z"), dubai)).isEqualTo("2026-02");
+        assertThat(VrpConsent.periodKeyOf(Instant.parse("2026-02-28T20:00:00Z"), dubai)).isEqualTo("2026-03");
+        assertThat(VrpConsent.periodKeyOf(Instant.parse("2026-02-28T20:00:00Z"), ZoneOffset.UTC)).isEqualTo("2026-02");
+    }
+
+    @Test
+    void aCollectionAfterDubaiMidnightCountsAgainstTheNewMonth() {
+        VrpConsent mandate = VrpConsent.authorise(CONSENT, createCommand(null), NOW).mandate();
+        Instant firstOfMarchInDubai = Instant.parse("2026-02-28T20:30:00Z");
+
+        PaymentAuthorisation authorisation = mandate.authorisePayment(
+                "PAY-1", submit("10.00", "AED"), BigDecimal.ZERO, firstOfMarchInDubai, ZoneId.of("Asia/Dubai"));
+
+        assertThat(authorisation.payment().periodKey()).isEqualTo("2026-03");
+        assertThat(authorisation.event().periodKey()).isEqualTo("2026-03");
+        assertThat(mandate.authorisePayment("PAY-2", submit("10.00", "AED"), BigDecimal.ZERO, firstOfMarchInDubai,
+                ZoneOffset.UTC).payment().periodKey()).isEqualTo("2026-02");
     }
 
     @Test

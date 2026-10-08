@@ -203,9 +203,9 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         consent.ensureCanCollect(command, now);
 
         var acceptedInPeriod = paymentPort.sumAcceptedAmountByConsentAndPeriod(
-                command.consentId(), VrpConsent.periodKeyOf(now));
+                command.consentId(), VrpConsent.periodKeyOf(now, settings.limitPeriodZone()));
         PaymentAuthorisation authorisation = consent.authorisePayment(
-                "PAY-VRP-" + UUID.randomUUID(), command, acceptedInPeriod, now);
+                "PAY-VRP-" + UUID.randomUUID(), command, acceptedInPeriod, now, settings.limitPeriodZone());
 
         VrpPayment saved = paymentPort.save(authorisation.payment());
         VrpConsent mandate = consentPort.save(authorisation.mandate());
