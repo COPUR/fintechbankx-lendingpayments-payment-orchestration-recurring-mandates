@@ -106,6 +106,8 @@ class RecurringMandatesServiceIT {
     // The real decoder (issuer + audience validation) is covered by SecurityConfigurationTest;
     // here a token "tok-<client>" stands for a valid Keycloak token of that TPP client.
     @MockBean JwtDecoder jwtDecoder;
+    // The application's Clock, spied so a test can pin the instant (reset after each test).
+    @org.springframework.boot.test.mock.mockito.SpyBean Clock clock;
 
     @BeforeEach
     void tokens() {
@@ -412,6 +414,33 @@ class RecurringMandatesServiceIT {
                 (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
         body.remove("timestamp");
         return body.toString();
+    }
+
+    @Test
+    void unknownAndOtherTppIdsGetByteIdentical404Bodies() throws Exception {
+        String consentId = createConsent("5000.00", null);
+        String paymentId = submit(consentId, "IDEMP-BYTES-1", "10.00");
+        // One instant for every response, so the comparison is about content, not timing.
+        // (Pinned to now: DPoP proofs must stay within their 5-minute iat window.)
+        Mockito.doReturn(Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)).when(clock).instant();
+
+        List<String[]> pairs = List.of(
+                new String[]{"GET", "/open-finance/v1/vrp/payment-consents/{id}", consentId, "CONS-NEVER-ISSUED"},
+                new String[]{"DELETE", "/open-finance/v1/vrp/payment-consents/{id}", consentId, "CONS-NEVER-ISSUED"},
+                new String[]{"GET", "/open-finance/v1/vrp/payments/{id}", paymentId, "PAY-VRP-NEVER-ISSUED"});
+        for (String[] pair : pairs) {
+            byte[] otherTpp = raw404(pair[0], pair[1], pair[2]);
+            byte[] unknown = raw404(pair[0], pair[1], pair[3]);
+            assertThat(otherTpp).as(pair[0] + " " + pair[1]).isNotEmpty().isEqualTo(unknown);
+        }
+    }
+
+    private byte[] raw404(String method, String path, String id) throws Exception {
+        MockHttpServletRequestBuilder request = "DELETE".equals(method)
+                ? delete(path, id).param("reason", "x")
+                : get(path, id);
+        return mvc.perform(as("TPP-002", request)).andExpect(status().isNotFound()).andReturn()
+                .getResponse().getContentAsByteArray();
     }
 
     @Test

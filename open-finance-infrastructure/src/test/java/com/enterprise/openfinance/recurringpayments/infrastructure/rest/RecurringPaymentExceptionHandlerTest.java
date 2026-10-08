@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Tag("unit")
 class RecurringPaymentExceptionHandlerTest {
 
-    private final RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler();
+    private final RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler(java.time.Clock.systemUTC());
 
     @Test
     void shouldMapForbiddenAndNotFoundAndConflict() {
@@ -51,7 +51,7 @@ class RecurringPaymentExceptionHandlerTest {
 
     @Test
     void shouldMapConcurrentUpdateDependencyFailureAndMalformedRequests() {
-        RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler();
+        RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler(java.time.Clock.systemUTC());
         org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
         request.addHeader("X-FAPI-Interaction-ID", "ix-err");
 
