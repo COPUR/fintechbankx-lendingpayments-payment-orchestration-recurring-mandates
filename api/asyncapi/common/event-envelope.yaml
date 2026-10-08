@@ -1,0 +1,156 @@
+# Shared event envelope and value schemas for every FinTechBankX event contract.
+# Referenced from asyncapi/<service-id>.yaml; not a standalone AsyncAPI document
+# (it lives in a subdirectory so the CI validate glob asyncapi/*.yaml skips it).
+#
+# Standard: docs/NAMING_CONVENTION_DDD_EDA_BUSINESS_CONTEXT.md
+# Status: Proposed (API Governance Guild review required)
+
+EventEnvelope:
+  type: object
+  description: >-
+    Standard envelope for every domain event. Producers write it through a
+    transactional outbox; the Kafka record key is aggregateId so that one
+    aggregate's events stay in one partition. Consumers must be idempotent on
+    eventId. Unknown fields must be ignored (additive changes are minor).
+  required:
+    - eventId
+    - eventType
+    - occurredAt
+    - aggregateId
+    - aggregateVersion
+    - correlationId
+    - causationId
+    - producer
+    - data
+  properties:
+    eventId:
+      type: string
+      format: uuid
+      description: Unique id of this event; the idempotency key for consumers.
+    eventType:
+      type: string
+      pattern: '^[A-Z][A-Za-z]*\.[A-Z][A-Za-z]*\.[A-Z][A-Za-z]*\.v[0-9]+$'
+      description: '<Context>.<Aggregate>.<PastTenseEvent>.v<major>, for example Lending.Loan.Disbursed.v1.'
+    occurredAt:
+      type: string
+      format: date-time
+      description: UTC ISO-8601 instant at which the fact happened in the aggregate.
+    aggregateId:
+      type: string
+      minLength: 1
+      description: Id of the aggregate that emitted the event. Also the Kafka record key.
+    aggregateVersion:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Version of the aggregate after the change; lets consumers detect gaps and reordering.
+    correlationId:
+      type: string
+      minLength: 1
+      description: >-
+        Id shared by every message of one business flow. Carries the
+        x-fapi-interaction-id when the flow started at a FAPI API.
+    causationId:
+      type:
+        - string
+        - 'null'
+      description: >-
+        eventId (or command/request id) of the message that caused this event;
+        null only for events that start a flow.
+    producer:
+      type: string
+      pattern: '^svc-[a-z]+-[a-z0-9-]+$'
+      description: Runtime service id of the producer (repository-bootstrap-manifest.csv).
+    data:
+      type: object
+      description: Event-specific payload. Ids and facts only; no personal data snapshots.
+
+EventHeaders:
+  type: object
+  description: >-
+    Kafka record headers. They duplicate envelope fields so brokers, DLQ
+    tooling and tracing can route without parsing the payload.
+  required:
+    - eventType
+    - eventId
+    - correlationId
+  properties:
+    eventType:
+      type: string
+      description: Same value as the envelope eventType.
+    eventId:
+      type: string
+      format: uuid
+    correlationId:
+      type: string
+    x-fapi-interaction-id:
+      type: string
+      description: Present when the flow started at a FAPI API.
+    traceparent:
+      type: string
+      description: W3C trace context.
+
+DeadLetterHeaders:
+  type: object
+  description: >-
+    Headers added by the consumer that moves a poison message to the
+    namespace DLQ after bounded retries. The original record value and key are
+    copied unchanged.
+  required:
+    - eventType
+    - eventId
+    - dlq-original-topic
+    - dlq-consumer-group
+    - dlq-attempts
+    - dlq-failed-at
+  properties:
+    eventType:
+      type: string
+    eventId:
+      type: string
+      format: uuid
+    correlationId:
+      type: string
+    dlq-original-topic:
+      type: string
+    dlq-original-partition:
+      type: integer
+    dlq-original-offset:
+      type: integer
+      format: int64
+    dlq-consumer-group:
+      type: string
+      description: 'Consumer group that gave up, cg.<service-id>.<purpose>.v<major>.'
+    dlq-attempts:
+      type: integer
+      minimum: 1
+    dlq-error-class:
+      type: string
+      description: Exception class or error code. Never the message text if it can contain personal data.
+    dlq-failed-at:
+      type: string
+      format: date-time
+
+MonetaryAmount:
+  type: object
+  description: Money value. Amount is a decimal string to avoid binary floating point rounding.
+  required:
+    - amount
+    - currency
+  properties:
+    amount:
+      type: string
+      pattern: '^-?[0-9]+(\.[0-9]+)?$'
+      examples:
+        - '25000.00'
+    currency:
+      type: string
+      pattern: '^[A-Z]{3}$'
+      description: ISO 4217 currency code.
+      examples:
+        - AED
+
+DecimalAmount:
+  type: string
+  pattern: '^-?[0-9]+(\.[0-9]+)?$'
+  description: Decimal number encoded as a string.
