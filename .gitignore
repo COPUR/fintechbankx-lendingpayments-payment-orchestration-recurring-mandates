@@ -4,3 +4,11 @@ build/
 *.iml
 .idea/
 /out/
+# Hexagonal port packages are named "out"; never ignore source directories.
+!**/src/**/out/
+
+# Terraform working files
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
