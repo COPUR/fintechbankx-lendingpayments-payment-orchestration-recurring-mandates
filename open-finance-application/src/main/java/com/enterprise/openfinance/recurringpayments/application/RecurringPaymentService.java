@@ -119,14 +119,12 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             return cached;
         }
 
-        Optional<VrpConsent> loaded = consentPort.findById(query.consentId())
-                .map(consent -> {
-                    consent.ensureOwnedBy(query.tppId());
-                    return consent;
-                });
+        // Unknown and another TPP's mandate get the same ConsentNotUsableException (one 403).
+        VrpConsent loaded = loadConsent(query.consentId());
+        loaded.ensureOwnedBy(query.tppId());
 
-        loaded.ifPresent(consent -> cachePort.putConsent(cacheKey, consent, now.plus(settings.cacheTtl())));
-        return loaded;
+        cachePort.putConsent(cacheKey, loaded, now.plus(settings.cacheTtl()));
+        return Optional.of(loaded);
     }
 
     @Override
@@ -270,7 +268,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
 
     private VrpConsent loadConsent(String consentId) {
         return consentPort.findById(consentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Consent not found"));
+                .orElseThrow(() -> new ConsentNotUsableException(ConsentNotUsableException.Reason.NOT_FOUND));
     }
 
     private static VrpPayment validatePaymentAccess(VrpPayment payment, String tppId) {

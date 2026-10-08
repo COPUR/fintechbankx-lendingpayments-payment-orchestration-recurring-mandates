@@ -352,6 +352,23 @@ class RecurringMandatesServiceIT {
                 .andExpect(status().isForbidden());
         mvc.perform(as("TPP-002", delete("/open-finance/v1/vrp/payment-consents/{id}", consentId)).param("reason", "x"))
                 .andExpect(status().isForbidden());
+        // Another TPP's mandate and an unknown one get the same 403 body on every consent endpoint,
+        // so mandate ids cannot be probed.
+        List<String> bodies = new ArrayList<>();
+        for (String id : List.of(consentId, "CONS-NEVER-ISSUED")) {
+            for (MockHttpServletRequestBuilder request : List.of(
+                    as("TPP-002", get("/open-finance/v1/vrp/payment-consents/{id}", id)),
+                    as("TPP-002", delete("/open-finance/v1/vrp/payment-consents/{id}", id)).param("reason", "x"),
+                    paymentRequest(id, "IDEMP-PROBE-" + bodies.size(), "10.00", "TPP-002"))) {
+                MvcResult result = mvc.perform(request).andExpect(status().isForbidden()).andReturn();
+                com.fasterxml.jackson.databind.node.ObjectNode body =
+                        (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
+                body.remove("timestamp");
+                bodies.add(body.toString());
+            }
+        }
+        assertThat(bodies).hasSize(6).containsOnly(bodies.get(0));
+        assertThat(bodies.get(0)).contains("Consent not found or not authorised");
         // A header naming another TPP than the token's client is refused.
         mvc.perform(asTpp(get("/open-finance/v1/vrp/payment-consents/{id}", consentId)).header("x-fapi-financial-id", "TPP-002"))
                 .andExpect(status().isForbidden());
@@ -495,7 +512,8 @@ class RecurringMandatesServiceIT {
         String proof = ItDpop.proof("GET", url, "tok-" + TPP);
         mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("DPoP", proof)
                         .header("x-fapi-interaction-id", "it-1"))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isForbidden()) // past DPoP: the unknown mandate gets the one consent 403
+                .andExpect(jsonPath("$.message").value("Consent not found or not authorised"));
         mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("DPoP", proof)
                         .header("x-fapi-interaction-id", "it-1"))
                 .andExpect(status().isUnauthorized());
@@ -530,7 +548,8 @@ class RecurringMandatesServiceIT {
                         .header("Authorization", "DPoP tok-" + TPP)
                         .header("DPoP", ItDpop.proof("GET", publicUrl, "tok-" + TPP))
                         .header("x-fapi-interaction-id", "it-1"))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isForbidden()) // past DPoP: the unknown mandate gets the one consent 403
+                .andExpect(jsonPath("$.message").value("Consent not found or not authorised"));
         // The pod-internal URL is not what the TPP signed: 401.
         mvc.perform(get("/open-finance/v1/vrp/payment-consents/CONS-ANY")
                         .header("X-Forwarded-Proto", "https").header("X-Forwarded-Host", "api.fintechbankx.example")

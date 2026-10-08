@@ -18,6 +18,10 @@ paths:
   /payment-consents:
     post:
       summary: Create recurring mandate consent
+      description: >-
+        A consent or mandate the caller may not use (unknown, not authorised by
+        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
+        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
       operationId: createRecurringConsent
       security:
         - bearerAuth: []
@@ -52,6 +56,10 @@ paths:
   /payment-consents/{consentId}:
     get:
       summary: Get recurring mandate consent status
+      description: >-
+        A consent or mandate the caller may not use (unknown, not authorised by
+        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
+        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
       operationId: getRecurringConsent
       security:
         - bearerAuth: []
@@ -69,8 +77,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConsentResponse'
+        '403':
+          $ref: '#/components/responses/Error'
     delete:
       summary: Revoke recurring mandate consent
+      description: >-
+        A consent or mandate the caller may not use (unknown, not authorised by
+        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
+        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
       operationId: revokeRecurringConsent
       security:
         - bearerAuth: []
@@ -99,6 +113,10 @@ paths:
   /payments:
     post:
       summary: Execute recurring payment under mandate
+      description: >-
+        A consent or mandate the caller may not use (unknown, not authorised by
+        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
+        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
       operationId: executeRecurringPayment
       security:
         - bearerAuth: []

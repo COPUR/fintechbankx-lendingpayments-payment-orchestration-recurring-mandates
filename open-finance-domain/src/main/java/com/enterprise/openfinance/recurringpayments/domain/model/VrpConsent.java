@@ -6,6 +6,7 @@ import com.enterprise.openfinance.recurringpayments.domain.event.MandateCreated;
 import com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted;
 import com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked;
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 
 import java.math.BigDecimal;
@@ -158,7 +159,8 @@ public record VrpConsent(
 
     public void ensureOwnedBy(String candidateTppId) {
         if (!belongsToTpp(candidateTppId)) {
-            throw new ForbiddenException("Consent participant mismatch");
+            // Same answer as an unknown mandate: another TPP cannot probe mandate ids.
+            throw new ConsentNotUsableException(ConsentNotUsableException.Reason.OTHER_TPP);
         }
     }
 

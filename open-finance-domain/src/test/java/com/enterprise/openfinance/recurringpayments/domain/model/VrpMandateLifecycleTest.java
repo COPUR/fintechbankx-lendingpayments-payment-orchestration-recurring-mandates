@@ -159,7 +159,7 @@ class VrpMandateLifecycleTest {
         SubmitVrpPaymentCommand otherTpp = new SubmitVrpPaymentCommand(
                 "TPP-OTHER", "CONS-AUTH-1", "IDEMP-1", new BigDecimal("10.00"), "AED", "ix-2");
         assertThatThrownBy(() -> mandate.authorisePayment("PAY-1", otherTpp, BigDecimal.ZERO, NOW))
-                .isInstanceOf(ForbiddenException.class).hasMessageContaining("participant mismatch");
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent not found or not authorised");
 
         VrpConsent revoked = mandate.revoke(NOW, "stop").mandate();
         assertThatThrownBy(() -> revoked.authorisePayment("PAY-1", submit("10.00", "AED"), BigDecimal.ZERO, NOW))

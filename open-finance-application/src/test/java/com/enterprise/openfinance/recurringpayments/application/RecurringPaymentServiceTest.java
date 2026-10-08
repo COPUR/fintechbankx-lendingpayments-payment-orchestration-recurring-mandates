@@ -331,7 +331,9 @@ class RecurringPaymentServiceTest {
     void shouldReturnEmptyWhenConsentOrPaymentMissing() {
         RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(), new TestCachePort(), new TestLockPort());
 
-        assertThat(service.getConsent(new GetVrpConsentQuery("CONS-404", "TPP-001", "ix-8"))).isEmpty();
+        // An unknown mandate is refused like another TPP's (one 403, no id probing).
+        assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery("CONS-404", "TPP-001", "ix-8")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent not found or not authorised");
         assertThat(service.getPayment(new GetVrpPaymentQuery("PAY-404", "TPP-001", "ix-8"))).isEmpty();
     }
 
@@ -350,7 +352,7 @@ class RecurringPaymentServiceTest {
 
         assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-OTHER", "ix-9")))
                 .isInstanceOf(ForbiddenException.class)
-                .hasMessageContaining("participant mismatch");
+                .hasMessage("Consent not found or not authorised");
 
         assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery(result.paymentId(), "TPP-OTHER", "ix-9")))
                 .isInstanceOf(ForbiddenException.class)
@@ -363,12 +365,12 @@ class RecurringPaymentServiceTest {
         VrpConsent consent = createConsent(service);
 
         assertThatThrownBy(() -> service.revokeConsent(new RevokeVrpConsentCommand("CONS-404", "TPP-001", "ix-10", "missing")))
-                .isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("Consent not found");
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessage("Consent not found or not authorised");
 
         assertThatThrownBy(() -> service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-OTHER", "ix-10", "forbidden")))
                 .isInstanceOf(ForbiddenException.class)
-                .hasMessageContaining("participant mismatch");
+                .hasMessage("Consent not found or not authorised");
     }
 
     @Test
@@ -383,8 +385,8 @@ class RecurringPaymentServiceTest {
                 new BigDecimal("10.00"),
                 "AED",
                 "ix-11"
-        ))).isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("Consent not found");
+        ))).isInstanceOf(ForbiddenException.class)
+                .hasMessage("Consent not found or not authorised");
 
         VrpConsent expired = new VrpConsent(
                 "CONS-EXP-001",
