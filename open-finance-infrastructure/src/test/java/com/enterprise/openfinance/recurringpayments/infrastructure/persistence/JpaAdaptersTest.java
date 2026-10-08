@@ -74,7 +74,8 @@ class JpaAdaptersTest {
         when(mandates.compareAndSet(anyString(), anyString(), any(), anyLong(), anyLong(), any())).thenReturn(0);
         assertThatThrownBy(() -> adapter.save(revoked))
                 .isInstanceOf(MandateVersionConflictException.class)
-                .hasMessageContaining("expected version 2");
+                .hasMessageContaining("expected version 2")
+                .satisfies(e -> assertThat(e.getMessage()).as("no identifiers in exception messages").doesNotContain("CONS-1"));
     }
 
     @Test

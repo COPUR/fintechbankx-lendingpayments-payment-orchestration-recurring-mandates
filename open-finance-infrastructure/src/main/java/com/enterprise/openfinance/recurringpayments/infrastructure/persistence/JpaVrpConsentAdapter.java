@@ -52,8 +52,9 @@ public class JpaVrpConsentAdapter implements VrpConsentPort {
         int updated = mandates.compareAndSet(consent.consentId(), consent.status().name(), consent.revokedAt(),
                 consent.version(), consent.version() - 1, clock.instant());
         if (updated != 1) {
-            throw new MandateVersionConflictException("Mandate " + consent.consentId()
-                    + " was changed concurrently; expected version " + (consent.version() - 1));
+            // No identifiers in exception messages; the request's interaction id ties it to the mandate.
+            throw new MandateVersionConflictException(
+                    "Mandate was changed concurrently; expected version " + (consent.version() - 1));
         }
         return consent;
     }
