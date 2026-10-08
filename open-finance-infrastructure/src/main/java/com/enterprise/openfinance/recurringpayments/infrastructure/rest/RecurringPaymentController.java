@@ -49,7 +49,7 @@ public class RecurringPaymentController {
     @PostMapping("/payment-consents")
     public ResponseEntity<VrpConsentResponse> createConsent(
             @RequestHeader("Authorization") @NotBlank String authorization,
-            @RequestHeader("DPoP") @NotBlank String dpop,
+            @RequestHeader(value = "DPoP", required = false) String dpop,
             @RequestHeader("X-FAPI-Interaction-ID") @NotBlank String interactionId,
             @RequestHeader(value = "x-fapi-financial-id", required = false) String financialId,
             @RequestBody VrpConsentRequest request
@@ -77,7 +77,7 @@ public class RecurringPaymentController {
     @GetMapping("/payment-consents/{consentId}")
     public ResponseEntity<VrpConsentResponse> getConsent(
             @RequestHeader("Authorization") @NotBlank String authorization,
-            @RequestHeader("DPoP") @NotBlank String dpop,
+            @RequestHeader(value = "DPoP", required = false) String dpop,
             @RequestHeader("X-FAPI-Interaction-ID") @NotBlank String interactionId,
             @RequestHeader(value = "x-fapi-financial-id", required = false) String financialId,
             @PathVariable @NotBlank String consentId,
@@ -117,7 +117,7 @@ public class RecurringPaymentController {
     @DeleteMapping("/payment-consents/{consentId}")
     public ResponseEntity<Void> revokeConsent(
             @RequestHeader("Authorization") @NotBlank String authorization,
-            @RequestHeader("DPoP") @NotBlank String dpop,
+            @RequestHeader(value = "DPoP", required = false) String dpop,
             @RequestHeader("X-FAPI-Interaction-ID") @NotBlank String interactionId,
             @RequestHeader(value = "x-fapi-financial-id", required = false) String financialId,
             @PathVariable @NotBlank String consentId,
@@ -137,7 +137,7 @@ public class RecurringPaymentController {
     @PostMapping("/payments")
     public ResponseEntity<VrpPaymentResponse> submitPayment(
             @RequestHeader("Authorization") @NotBlank String authorization,
-            @RequestHeader("DPoP") @NotBlank String dpop,
+            @RequestHeader(value = "DPoP", required = false) String dpop,
             @RequestHeader("X-FAPI-Interaction-ID") @NotBlank String interactionId,
             @RequestHeader(value = "x-fapi-financial-id", required = false) String financialId,
             @RequestHeader("x-idempotency-key") @NotBlank String idempotencyKey,
@@ -173,7 +173,7 @@ public class RecurringPaymentController {
     @GetMapping("/payments/{paymentId}")
     public ResponseEntity<VrpPaymentResponse> getPayment(
             @RequestHeader("Authorization") @NotBlank String authorization,
-            @RequestHeader("DPoP") @NotBlank String dpop,
+            @RequestHeader(value = "DPoP", required = false) String dpop,
             @RequestHeader("X-FAPI-Interaction-ID") @NotBlank String interactionId,
             @RequestHeader(value = "x-fapi-financial-id", required = false) String financialId,
             @PathVariable @NotBlank String paymentId,
@@ -220,9 +220,6 @@ public class RecurringPaymentController {
         boolean validAuthorization = authorization.startsWith("DPoP ") || authorization.startsWith("Bearer ");
         if (!validAuthorization) {
             throw new IllegalArgumentException("Authorization header must use Bearer or DPoP token type");
-        }
-        if (dpop.isBlank()) {
-            throw new IllegalArgumentException("DPoP header is required");
         }
         if (interactionId.isBlank()) {
             throw new IllegalArgumentException("X-FAPI-Interaction-ID header is required");

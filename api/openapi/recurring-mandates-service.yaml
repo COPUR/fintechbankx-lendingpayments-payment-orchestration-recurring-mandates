@@ -5,9 +5,12 @@ info:
   description: >-
     API for variable recurring payment mandate lifecycle and execution
     (svc-pay-recurring-mandates). Tokens must carry the service id in aud; the
-    TPP is the token's client (azp). DPoP proof headers are required by the
-    contract but are not cryptographically validated by this service
-    (platform decision 2026-10-08).
+    TPP is the token's client (azp). DPoP (RFC 9449) is enforced: the
+    Authorization header uses the DPoP scheme with a token bound by cnf.jkt,
+    and every request carries a fresh proof (typ dpop+jwt, ES256 or PS256,
+    htm, htu, iat within 5 minutes, ath, single-use jti). A plain Bearer
+    token, a missing, replayed or mismatching proof is answered 401 with
+    WWW-Authenticate DPoP error="invalid_dpop_proof".
 servers:
   - url: https://api.example.com/open-finance/v1/vrp
     description: The service serves every path below under /open-finance/v1/vrp.
@@ -171,6 +174,7 @@ components:
       name: DPoP
       in: header
       required: true
+      description: DPoP proof JWT for this request, verified by the service (single use).
       schema:
         type: string
   schemas:

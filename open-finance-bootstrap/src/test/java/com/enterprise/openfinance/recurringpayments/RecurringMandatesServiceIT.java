@@ -108,12 +108,14 @@ class RecurringMandatesServiceIT {
             return Jwt.withTokenValue(token).header("alg", "RS256")
                     .subject("service-account-" + client).claim("azp", client)
                     .audience(List.of("svc-pay-recurring-mandates"))
+                    .claim("cnf", java.util.Map.of("jkt", ItDpop.thumbprint()))
                     .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300)).build();
         });
     }
 
     @BeforeEach
     void cleanTables() {
+        jdbc.update("delete from " + SCHEMA + ".dpop_proof_jti");
         jdbc.update("delete from " + SCHEMA + ".mandate_outbox_event");
         jdbc.update("delete from " + SCHEMA + ".mandate_idempotency_record");
         jdbc.update("delete from " + SCHEMA + ".mandate_payment");
@@ -128,7 +130,7 @@ class RecurringMandatesServiceIT {
                 order by table_name
                 """, String.class);
 
-        assertThat(tables).containsExactly("mandate_idempotency_record", "mandate_outbox_event", "mandate_payment", "mandate_record");
+        assertThat(tables).containsExactly("dpop_proof_jti", "mandate_idempotency_record", "mandate_outbox_event", "mandate_payment", "mandate_record");
     }
 
     @Test
@@ -306,6 +308,31 @@ class RecurringMandatesServiceIT {
     }
 
     @Test
+    void vrpApiRequiresTheDpopSchemeAProofAndAFreshJti() throws Exception {
+        String url = "http://localhost/open-finance/v1/vrp/payment-consents/CONS-ANY";
+        // Plain Bearer with a valid proof: 401.
+        mvc.perform(get(url).with(ItDpop.dpop("Bearer", "tok-" + TPP)).header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("WWW-Authenticate", org.hamcrest.Matchers.startsWith("DPoP error=\"invalid_dpop_proof\"")));
+        // DPoP scheme without a proof: 401.
+        mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isUnauthorized());
+        // A proof is accepted once; the replay is refused by the shared jti table.
+        String proof = ItDpop.proof("GET", url, "tok-" + TPP);
+        mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("DPoP", proof)
+                        .header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isNotFound());
+        mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("DPoP", proof)
+                        .header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isUnauthorized());
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".dpop_proof_jti", Integer.class)).isEqualTo(1);
+        // A proof for another method is refused.
+        mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP)
+                        .header("DPoP", ItDpop.proof("DELETE", url, "tok-" + TPP)).header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void healthAndUnknownPathsAreHandledBySecurity() throws Exception {
         mvc.perform(asTpp(get("/internal/anything"))).andExpect(status().isForbidden());
     }
@@ -389,8 +416,7 @@ class RecurringMandatesServiceIT {
 
     private static MockHttpServletRequestBuilder as(String tpp, MockHttpServletRequestBuilder request) {
         return request
-                .header("Authorization", "DPoP tok-" + tpp)
-                .header("DPoP", "it-proof")
+                .with(ItDpop.dpop("DPoP", "tok-" + tpp))
                 .header("x-fapi-interaction-id", "it-interaction-1");
     }
 }

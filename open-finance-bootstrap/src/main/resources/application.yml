@@ -148,6 +148,16 @@ mandates:
       # Longer than delivery.timeout.ms, so the relay never gives up on a send Kafka is still retrying.
       send-timeout: PT35S
 
+security:
+  dpop:
+    # The VRP API is TPP-facing: DPoP scheme, cnf.jkt-bound token and a fresh
+    # proof (jti kept in dpop_proof_jti) on every call. false only lets an
+    # unbound Bearer token without a proof through; never false in production.
+    required: ${DPOP_REQUIRED:true}
+    max-age: PT5M
+    clock-skew: PT30S
+    purge-interval: PT10M
+
 logging:
   pattern:
     level: "%5p [${spring.application.name},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
