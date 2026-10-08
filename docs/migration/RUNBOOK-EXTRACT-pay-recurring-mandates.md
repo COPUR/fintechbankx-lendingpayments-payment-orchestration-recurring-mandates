@@ -46,8 +46,8 @@ Consequences:
 | 5 | Remove `recurringpayments` from the monolith (`open-finance-context`). | revert the removal commit |
 
 Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
-`/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; any increase of
-`outbox_parked_events_total`; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
+`/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; the platform alert
+`OutboxEventsParked` firing for `service_id="svc-pay-recurring-mandates"`; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
 
 ### Rollback during the soak window
 
@@ -182,15 +182,24 @@ time-based parking. A failed send falls into one of two classes:
 
 | Class | Errors | What the relay does | Signal |
 |---|---|---|---|
-| Payload | `RecordTooLargeException`, `SerializationException`, `InvalidTopicException` | parks the row at once (`parked_reason` = `relay: payload error ...`) and continues with other mandates; the mandate's later events stay held back | `outbox_parked_events_total{exception="<class>"}` increases (alert on any increase); gauge `outbox_parked_rows` shows rows parked now |
+| Payload | `RecordTooLargeException`, `SerializationException`, `InvalidTopicException` | parks the row at once (`parked_reason` = `relay: payload error ...`) and continues with other mandates; the mandate's later events stay held back | `outbox_parked_events_total{exception="<class>"}` increases and the platform alert `OutboxEventsParked` fires; gauge `outbox_parked_rows` shows rows parked now |
 | Everything else | retriable broker or network errors (`TimeoutException`, `NotEnoughReplicasException`, ...), the relay's own send timeout, `SaslAuthenticationException`, `TopicAuthorizationException`, producer construction failures, anything unclassified | never parks: stops the batch without marking any row (no park, no attempt, no `last_error`) and retries with backoff 2 s doubling to 5 min, reset by the next successful send | `outbox_oldest_pending_age_seconds` grows; `outbox_send_failures_total{exception="<class>"}` counts each failure (tag = exception class only, never ids) |
 
 A parked row holds back its mandate: the relay publishes none of that mandate's later
 events, in that run or later ones, until the parked row is replayed or discarded. Other
 mandates keep flowing, so consumers never see a mandate's events out of order.
 
-An increase of `outbox_parked_events_total` (or `outbox_parked_rows` above 0) means a
-consumer is missing an event. Find the rows:
+Alerting is the platform's, not this chart's: `OutboxEventsParked` (observability
+repository `deploy/kustomize/base/prometheus-rules/fbx-kafka-outbox.yaml`, severity
+`warning`) fires on any increase of `outbox_parked_events_total` over 15 minutes, per
+`service_id` and `exception`, and counts a series that first appears in that window with
+its full value (Micrometer registers the counter on the first park). The chart ships no
+alert rules for parked rows; do not add a local delta rule. `outbox_parked_rows` is not
+alerted on; read it here to see how many rows are parked now. Status of that rule:
+observability PR #11, not merged at the time of writing.
+
+When `OutboxEventsParked` fires (or `outbox_parked_rows` is above 0) a consumer is
+missing an event. Find the rows:
 
 ```sql
 SELECT event_id, created_seq, topic, aggregate_id, attempts, parked_reason, last_error, parked_at

@@ -90,6 +90,10 @@ jobs:
           # Mesh egress (allow-egress-aurora) selects app.kubernetes.io/name only: the hook Job pod
           # carries the SA name; component labels keep it out of the API pods' selectors. Only the
           # API pods carry fintechbankx.io/service-id (observability scrape and alert key).
+          # Parked-outbox alerting is the platform's OutboxEventsParked rule; the chart ships none.
+          if grep -qE 'kind: PrometheusRule|outbox_parked' <<<"$rendered"; then
+            echo "the chart renders its own outbox alert rule; use the platform OutboxEventsParked" >&2; exit 1
+          fi
           python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates <<<"$rendered"
           helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates
       - name: Missing required config fails the render
