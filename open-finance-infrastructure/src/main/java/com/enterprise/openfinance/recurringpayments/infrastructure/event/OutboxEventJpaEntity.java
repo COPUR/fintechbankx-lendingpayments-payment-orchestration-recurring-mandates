@@ -60,9 +60,9 @@ public class OutboxEventJpaEntity {
     @Column(name = "parked_at")
     private Instant parkedAt;
 
-    /** First failed send; the retryable-failure ceiling is measured from here. */
-    @Column(name = "first_failed_at")
-    private Instant firstFailedAt;
+    /** Why the row is parked: "relay: payload error ..." or "operator: ..." (required with parked_at, V6). */
+    @Column(name = "parked_reason", length = MAX_ERROR_LENGTH)
+    private String parkedReason;
 
     @Column(name = "attempts", nullable = false)
     private int attempts;
@@ -100,7 +100,7 @@ public class OutboxEventJpaEntity {
     public String getTraceparent() { return traceparent; }
     public Instant getPublishedAt() { return publishedAt; }
     public Instant getParkedAt() { return parkedAt; }
-    public Instant getFirstFailedAt() { return firstFailedAt; }
+    public String getParkedReason() { return parkedReason; }
     public int getAttempts() { return attempts; }
     public String getLastError() { return lastError; }
 
@@ -110,17 +110,15 @@ public class OutboxEventJpaEntity {
         this.lastError = null;
     }
 
-    /** Records a failed send; the first one starts the retryable-failure clock. */
-    void markFailed(String error, Instant at) {
-        if (firstFailedAt == null) {
-            this.firstFailedAt = at;
-        }
+    /** Records a failed send of a record that can never be sent (payload error). */
+    void markFailed(String error) {
         this.attempts++;
         this.lastError = error == null ? null : error.substring(0, Math.min(error.length(), MAX_ERROR_LENGTH));
     }
 
     /** Takes the row out of the relay's queue until an operator replays it. */
-    void park(Instant at) {
+    void park(Instant at, String reason) {
         this.parkedAt = at;
+        this.parkedReason = reason.substring(0, Math.min(reason.length(), MAX_ERROR_LENGTH));
     }
 }

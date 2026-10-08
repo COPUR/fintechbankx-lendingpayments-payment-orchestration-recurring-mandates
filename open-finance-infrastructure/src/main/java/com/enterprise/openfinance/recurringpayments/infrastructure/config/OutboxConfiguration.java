@@ -30,10 +30,10 @@ public class OutboxConfiguration {
 
     /**
      * Platform metric names: outbox_pending_events, outbox_parked_events (alert
-     * on any: events that need an operator) and
-     * outbox_oldest_pending_age_seconds (the outage alert: retryable failures
-     * stop the relay without parking for up to retryable-park-after, so this
-     * age, not the parked count, shows a broker or egress outage).
+     * on any: events that need an operator), outbox_oldest_pending_age_seconds
+     * (the stalled-relay alert: non-payload failures never park, so this age
+     * shows a broker, egress or authorisation problem) and
+     * outbox_send_failures_total{exception} (registered by OutboxRelay).
      */
     @Bean
     Gauge outboxPendingGauge(MeterRegistry registry, SpringDataOutboxRepository outbox) {
@@ -45,7 +45,7 @@ public class OutboxConfiguration {
     @Bean
     Gauge outboxParkedGauge(MeterRegistry registry, SpringDataOutboxRepository outbox) {
         return Gauge.builder("outbox.parked.events", outbox, SpringDataOutboxRepository::countParked)
-                .description("Mandate events parked by the relay (permanent failure, or retryable failures for longer than retryable-park-after)")
+                .description("Mandate events parked (payload error, or by an operator with a reason)")
                 .register(registry);
     }
 
@@ -80,21 +80,9 @@ public class OutboxConfiguration {
                                 @Value("${mandates.outbox.relay.batch-size:100}") int batchSize,
                                 @Value("${mandates.outbox.relay.send-timeout:PT35S}") Duration sendTimeout,
                                 @Value("${mandates.outbox.retention:P7D}") Duration retention,
-                                @Value("${mandates.outbox.relay.retryable-park-after:PT24H}") Duration retryableParkAfter) {
+                                MeterRegistry meters) {
             return new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager), clock, batchSize,
-                    sendTimeout, retention, retryableParkAfter);
-        }
-
-        /**
-         * 1 while the relay backs off after an authorisation or unclassified
-         * Kafka failure (Prometheus outbox_relay_blocked; ADR-021 decision 4):
-         * alert on 1 for more than 5 minutes. No identifiers in tags.
-         */
-        @Bean
-        Gauge outboxRelayBlockedGauge(MeterRegistry registry, OutboxRelay relay) {
-            return Gauge.builder("outbox.relay.blocked", relay, r -> r.blocked() ? 1d : 0d)
-                    .description("1 while the outbox relay is blocked by an authorisation or unclassified Kafka failure")
-                    .register(registry);
+                    sendTimeout, retention, meters);
         }
 
         @Bean

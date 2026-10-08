@@ -178,12 +178,10 @@ mandates:
       enabled: ${OUTBOX_RELAY_ENABLED:false}
       interval: PT1S
       batch-size: 100
-      # ADR-021 decision 4. No attempt-count cap: retriable failures (Kafka
-      # RetriableException, timeouts) stop the batch and park a row only after it
-      # has been failing continuously for longer than this (from first_failed_at).
-      # Payload errors park at once; authorisation and unclassified errors stop
-      # the batch without marking a row and back off (outbox_relay_blocked).
-      retryable-park-after: ${OUTBOX_RELAY_RETRYABLE_PARK_AFTER:PT24H}
+      # ADR-021 decision 4: payload errors park the row (its mandate stays held
+      # back); every other error stops the batch without marking a row and the
+      # relay backs off (2 s to 5 min). No time-based parking. Alert on
+      # outbox_oldest_pending_age_seconds and outbox_send_failures_total.
       # Longer than delivery.timeout.ms, so the relay never gives up on a send Kafka is still retrying.
       send-timeout: PT35S
 

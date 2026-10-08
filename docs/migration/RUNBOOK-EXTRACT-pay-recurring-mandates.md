@@ -32,14 +32,14 @@ Consequences:
 - No `db/backfill`, no `scripts/migration/verify-backfill.sh` and no
   data-split CI job in this repository, on purpose.
 - Flyway migrations: `open-finance-infrastructure/src/main/resources/db/migration/V1__create_mandate_tables.sql`,
-  `V2__create_outbox.sql`, `V3__create_dpop_proof_jti.sql`, `V4__outbox_first_failed_at.sql`. The service never reads monolith tables; nothing
+  `V2__create_outbox.sql`, `V3__create_dpop_proof_jti.sql`, `V4__outbox_first_failed_at.sql`, `V5__grant_runtime_role_least_privilege.sql`, `V6__outbox_park_reason_no_time_ceiling.sql`. The service never reads monolith tables; nothing
   else may read `sc_pay_recurring_mandates`.
 
 ## 2. Cutover plan (routing only)
 
 | Step | Action | Rollback |
 |---|---|---|
-| 1 | DBA bootstrap (section "Database roles" below): create the schema owner `pay_recurring_mandates_owner` and the runtime role `pay_recurring_mandates_app`, write their credentials to `<env>/payment-recurring-mandates-service/db-migration` and `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`), `migration.remoteSecretName` to `migration_db_secret_name`. Deploy with `OUTBOX_RELAY_ENABLED=false`; the pre-install hook Job runs Flyway as the owner (V1 to V5) before the pods start. | uninstall the chart; drop the schema |
+| 1 | DBA bootstrap (section "Database roles" below): create the schema owner `pay_recurring_mandates_owner` and the runtime role `pay_recurring_mandates_app`, write their credentials to `<env>/payment-recurring-mandates-service/db-migration` and `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`), `migration.remoteSecretName` to `migration_db_secret_name`. Deploy with `OUTBOX_RELAY_ENABLED=false`; the pre-install hook Job runs Flyway as the owner (V1 to V6) before the pods start. | uninstall the chart; drop the schema |
 | 2 | Mesh team has applied "Requests to the mesh team" below: B (Aurora, MSK, STS egress) before step 1 completes, otherwise the readiness check (`db`) fails under `REGISTRY_ONLY`; A (gateway route) and C (callee ALLOW rules) before step 3. | remove the route; ALLOW rules and egress can stay |
 | 3 | Route `/open-finance/v1/vrp/**` at the ingress gateway from the monolith to this service; announce to TPPs that mandates must be re-created. The soak window starts (72 h without a rollback trigger). | "Rollback during the soak window" below: freeze the writes, route back, account for what stays here |
 | 4 | Only after the soak window ended without a rollback, and once `evt.pay.mandate.*.v1` exist in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 3 are relayed in order. | relay off; unsent events stay in the outbox (events already published cannot be recalled) |
@@ -47,7 +47,7 @@ Consequences:
 
 Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
 `/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; `outbox_parked_events`
-above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 or `outbox_relay_blocked` = 1 for 5 minutes with the relay enabled.
+above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
 
 ### Rollback during the soak window
 
@@ -150,7 +150,7 @@ sidecar on.
 - [x] Service builds and tests standalone (`./gradlew check`, including PostgreSQL integration tests with `TEST_DB_URL`)
 - [x] Own schema and migrations; Hibernate validates entities at startup
 - [x] Flyway as the schema owner in a Helm hook Job; pods run as a DML-only role (IT proves the runtime role cannot run DDL)
-- [x] Events written through a transactional outbox, relayed in order with one active relay; permanent failures parked at once, retryable failures parked only after 24 h of continuous failure
+- [x] Events written through a transactional outbox, relayed in order with one active relay; payload errors parked at once and their mandate held back; every other failure stops the batch without marking a row and backs off (ADR-021 decision 4, no time-based parking)
 - [x] Idempotent collections (`x-idempotency-key`, unique per TPP in the database, race-tested)
 - [x] Monthly limit enforced under concurrency (advisory lock per mandate plus version compare-and-set)
 - [x] Debtor account check through the accounts API with a service token, failing closed
@@ -161,14 +161,13 @@ sidecar on.
 
 ## 4. Parked outbox events
 
-Policy: ADR-021 decision 4 (adr-runbooks #10, 421f7b5). The relay has no attempt cap and
-sorts a failed send into one of three classes:
+Policy: ADR-021 decision 4 (adr-runbooks #10, e6dd76a). There is no attempt cap and no
+time-based parking. A failed send falls into one of two classes:
 
 | Class | Errors | What the relay does | Signal |
 |---|---|---|---|
-| Retriable | any Kafka `RetriableException` (`TimeoutException`, `NotEnoughReplicasException`, `NetworkException`, ...) or the relay's own send timeout | stops the batch, retries next run; parks the row only after it has failed continuously for longer than `mandates.outbox.relay.retryable-park-after` (`OUTBOX_RELAY_RETRYABLE_PARK_AFTER`, default `PT24H`) from its `first_failed_at` (V4) | `outbox_oldest_pending_age_seconds` grows |
-| Payload | `RecordTooLargeException`, `SerializationException`, `InvalidTopicException` | parks the row at once and continues with other mandates | `outbox_parked_events` above 0 |
-| Authorisation or unclassified | `SaslAuthenticationException`, `TopicAuthorizationException`, producer construction failures, anything else | stops the batch without marking any row (no park, no attempt, no `last_error`); retries with backoff 2 s doubling to 5 min, reset by the next successful send | `outbox_relay_blocked` = 1 (alert after 5 min); fix IRSA/MSK policy or ACLs, the relay resumes by itself |
+| Payload | `RecordTooLargeException`, `SerializationException`, `InvalidTopicException` | parks the row at once (`parked_reason` = `relay: payload error ...`) and continues with other mandates; the mandate's later events stay held back | `outbox_parked_events` above 0 |
+| Everything else | retriable broker or network errors (`TimeoutException`, `NotEnoughReplicasException`, ...), the relay's own send timeout, `SaslAuthenticationException`, `TopicAuthorizationException`, producer construction failures, anything unclassified | never parks: stops the batch without marking any row (no park, no attempt, no `last_error`) and retries with backoff 2 s doubling to 5 min, reset by the next successful send | `outbox_oldest_pending_age_seconds` grows; `outbox_send_failures_total{exception="<class>"}` counts each failure (tag = exception class only, never ids) |
 
 A parked row holds back its mandate: the relay publishes none of that mandate's later
 events, in that run or later ones, until the parked row is replayed or discarded. Other
@@ -177,19 +176,17 @@ mandates keep flowing, so consumers never see a mandate's events out of order.
 `outbox_parked_events` above 0 means a consumer is missing an event. Find the rows:
 
 ```sql
-SELECT event_id, created_seq, topic, aggregate_id, attempts, first_failed_at, last_error, parked_at
+SELECT event_id, created_seq, topic, aggregate_id, attempts, parked_reason, last_error, parked_at
 FROM sc_pay_recurring_mandates.mandate_outbox_event
 WHERE parked_at IS NOT NULL
 ORDER BY created_seq;
 ```
 
-Fix the cause (topic ACL, topic missing, payload size), then replay. Reset
-`first_failed_at` as well, otherwise the 24 h ceiling parks the row again on its
-first retryable failure:
+Replay after fixing the cause (topic ACL, topic missing, payload size), as the schema owner:
 
 ```sql
 UPDATE sc_pay_recurring_mandates.mandate_outbox_event
-SET parked_at = NULL, first_failed_at = NULL, attempts = 0, last_error = NULL
+SET parked_at = NULL, parked_reason = NULL, attempts = 0, last_error = NULL
 WHERE event_id = '<event id>';
 ```
 
@@ -197,3 +194,15 @@ The replayed row goes out on the next run, followed by the mandate's held-back e
 `created_seq` order. To discard a parked event instead (only with the consumers' owners'
 agreement, since they then never see it), delete the row as the schema owner; the
 mandate's later events then flow. Consumers de-duplicate on `eventId`.
+
+**Operator park** (the only way a row that is not a payload error gets parked, e.g. a
+stuck head row blocking the queue while a fix is prepared). The reason is mandatory; the
+V6 check constraint `ck_outbox_parked_reason` refuses a park without one:
+
+```sql
+UPDATE sc_pay_recurring_mandates.mandate_outbox_event
+SET parked_at = now(), parked_reason = 'operator: <ticket> <why>'
+WHERE event_id = '<event id>';
+```
+
+Its mandate's later events are then held back too; replay as above.

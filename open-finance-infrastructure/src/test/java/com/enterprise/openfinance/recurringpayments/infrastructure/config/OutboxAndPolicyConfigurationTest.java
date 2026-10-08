@@ -52,12 +52,9 @@ class OutboxAndPolicyConfigurationTest {
         OutboxConfiguration.RelayConfiguration relayConfiguration = new OutboxConfiguration.RelayConfiguration();
         SpringDataOutboxRepository outbox = mock(SpringDataOutboxRepository.class);
         OutboxRelay relay = relayConfiguration.outboxRelay(outbox, mock(KafkaTemplate.class),
-                mock(PlatformTransactionManager.class), Clock.systemUTC(), 10, Duration.ofSeconds(1), Duration.ofDays(1), Duration.ofHours(24));
+                mock(PlatformTransactionManager.class), Clock.systemUTC(), 10, Duration.ofSeconds(1), Duration.ofDays(1),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
         assertThat(relay).isNotNull();
-        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
-        relayConfiguration.outboxRelayBlockedGauge(registry, relay);
-        assertThat(registry.get("outbox.relay.blocked").gauge().value()).isZero();
-        assertThat(registry.get("outbox.relay.blocked").gauge().getId().getTags()).isEmpty();
 
         OutboxRelay mockRelay = mock(OutboxRelay.class);
         OutboxConfiguration.RelaySchedule schedule = relayConfiguration.relaySchedule(mockRelay);

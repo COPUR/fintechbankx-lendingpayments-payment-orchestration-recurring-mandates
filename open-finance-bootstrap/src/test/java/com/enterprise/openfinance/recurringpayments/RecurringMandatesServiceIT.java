@@ -349,9 +349,10 @@ class RecurringMandatesServiceIT {
         assertThat(jdbc.queryForObject("select event_type from " + SCHEMA + ".mandate_outbox_event"
                 + " where published_at is null and parked_at is null", String.class))
                 .isEqualTo("Payments.Mandate.PaymentAccepted.v1");
-        java.util.Map<String, Object> parked = jdbc.queryForMap("select attempts, first_failed_at, last_error from "
+        java.util.Map<String, Object> parked = jdbc.queryForMap("select attempts, parked_reason, last_error from "
                 + SCHEMA + ".mandate_outbox_event where parked_at is not null");
         assertThat(parked.get("attempts")).isEqualTo(1);
+        assertThat((String) parked.get("parked_reason")).startsWith("relay: payload error RecordTooLargeException");
         assertThat((String) parked.get("last_error")).startsWith("RecordTooLargeException: The message is 2000000 bytes");
         ArgumentCaptor<ProducerRecord<String, String>> records = ArgumentCaptor.forClass(ProducerRecord.class);
         Mockito.verify(kafka, Mockito.times(2)).send(records.capture());
@@ -363,7 +364,7 @@ class RecurringMandatesServiceIT {
 
         // Runbook replay: un-park the event; it and then the held-back event go out in order.
         PostgresTestDatabase.owner().update("update " + SCHEMA + ".mandate_outbox_event"
-                + " set parked_at = null, first_failed_at = null, attempts = 0, last_error = null where parked_at is not null");
+                + " set parked_at = null, parked_reason = null, attempts = 0, last_error = null where parked_at is not null");
         Mockito.reset(kafka);
         when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture((SendResult<String, String>) null));
         assertThat(relay.relayOnce()).isEqualTo(2);
@@ -372,34 +373,45 @@ class RecurringMandatesServiceIT {
 
     @Test
     @SuppressWarnings("unchecked")
-    void aBrokerOutageNeverParksUntilARowHasFailedFor24Hours() throws Exception {
+    void aBrokerOutageNeverParksOrMarksARowAndOnlyAnOperatorParksWithAReason() throws Exception {
         String mandate = createConsent("5000.00", null);
         submit(mandate, "IDEMP-OUTAGE-1", "10.00");
+        String other = createConsent("700.00", null);
         when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.failedFuture(
                 new org.apache.kafka.common.errors.TimeoutException("Expiring 1 record(s): broker unavailable")));
-        OutboxRelay relay = relay();
 
-        for (int run = 0; run < 25; run++) {
-            assertThat(relay.relayOnce()).isZero();
+        for (int restart = 0; restart < 5; restart++) {
+            assertThat(relay().relayOnce()).isZero(); // a fresh relay each time, as after pod restarts
         }
 
-        assertThat(outbox.countParked()).as("retryable failures never count toward parking").isZero();
-        assertThat(outbox.countPending()).isEqualTo(2);
-        assertThat(jdbc.queryForObject("select max(attempts) from " + SCHEMA + ".mandate_outbox_event", Integer.class))
-                .isEqualTo(25);
-        Mockito.verify(kafka, Mockito.times(25)).send(any(ProducerRecord.class)); // the batch stops at the stuck row
+        assertThat(outbox.countParked()).as("no automatic parking for a non-payload error").isZero();
+        assertThat(outbox.countPending()).isEqualTo(3);
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_outbox_event"
+                + " where attempts > 0 or last_error is not null", Integer.class)).as("no row is marked").isZero();
+        Mockito.verify(kafka, Mockito.times(5)).send(any(ProducerRecord.class)); // each run stops at the first row
 
-        // The same row has now been failing since 25 h ago: the next retryable failure parks it.
-        PostgresTestDatabase.owner().update("update " + SCHEMA + ".mandate_outbox_event set first_failed_at = now() - interval '25 hours'"
-                + " where first_failed_at is not null");
-        assertThat(relay.relayOnce()).isZero();
-        assertThat(outbox.countParked()).isEqualTo(1);
+        // Only an operator parks such a row, and only with a recorded reason (V6 check constraint).
+        JdbcTemplate owner = PostgresTestDatabase.owner();
+        String oldest = "(select event_id from " + SCHEMA + ".mandate_outbox_event order by created_seq limit 1)";
+        assertThatThrownBy(() -> owner.update("update " + SCHEMA + ".mandate_outbox_event set parked_at = now()"
+                + " where event_id = " + oldest))
+                .rootCause().hasMessageContaining("ck_outbox_parked_reason");
+        owner.update("update " + SCHEMA + ".mandate_outbox_event set parked_at = now(),"
+                + " parked_reason = 'operator: INC-1 topic ACL missing' where event_id = " + oldest);
+
+        Mockito.reset(kafka);
+        when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture((SendResult<String, String>) null));
+        assertThat(relay().relayOnce()).isEqualTo(1); // only the other mandate; the parked mandate stays held back
+        ArgumentCaptor<ProducerRecord<String, String>> records = ArgumentCaptor.forClass(ProducerRecord.class);
+        Mockito.verify(kafka).send(records.capture());
+        assertThat(records.getValue().key()).isEqualTo(other);
         assertThat(outbox.countPending()).isEqualTo(1);
     }
 
     private OutboxRelay relay() {
         return new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager),
-                Clock.systemUTC(), 100, Duration.ofSeconds(5), Duration.ofDays(7), Duration.ofHours(24));
+                Clock.systemUTC(), 100, Duration.ofSeconds(5), Duration.ofDays(7),
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Test
