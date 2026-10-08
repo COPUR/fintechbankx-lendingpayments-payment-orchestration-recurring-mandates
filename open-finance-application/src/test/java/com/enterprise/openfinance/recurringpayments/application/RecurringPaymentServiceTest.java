@@ -243,6 +243,52 @@ class RecurringPaymentServiceTest {
     }
 
     @Test
+    void aRetryAfterTheMandateWasRevokedReturnsTheStoredResult() {
+        TestPaymentPort payments = new TestPaymentPort();
+        RecurringPaymentService service = service(new TestConsentPort(), payments, new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+        VrpConsent consent = createConsent(service);
+        SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-1", new BigDecimal("10.00"), "AED", "ix-7");
+        VrpCollectionResult accepted = service.submitCollection(collection);
+
+        service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-7", "User request"));
+        VrpCollectionResult retried = service.submitCollection(collection);
+
+        assertThat(retried.paymentId()).isEqualTo(accepted.paymentId());
+        assertThat(retried.status()).isEqualTo(accepted.status());
+        assertThat(retried.idempotencyReplay()).isTrue();
+        assertThat(payments.data).hasSize(1);
+        // A different request under the same key is still a conflict, not a new collection.
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-1", new BigDecimal("11.00"), "AED", "ix-7")))
+                .isInstanceOf(IdempotencyConflictException.class);
+        // A new key on the revoked mandate is refused.
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-2", new BigDecimal("10.00"), "AED", "ix-7")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
+    }
+
+    @Test
+    void aRetryAfterThePsuWithdrewTheConsentReturnsTheStoredResultWithoutAskingTheConsentService() {
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), new RecordingEventPublisher(), new TestDebtorAccountPort(), consents);
+        VrpConsent mandate = service.createConsent(command("CONS-AUTH-RETRY", null, "ACC-DEFAULT"));
+        SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
+                "TPP-001", mandate.consentId(), "IDEMP-WD-RETRY-1", new BigDecimal("10.00"), "AED", "ix-8");
+        VrpCollectionResult accepted = service.submitCollection(collection);
+
+        consents.data.put(mandate.consentId(), new PsuConsent(mandate.consentId(), "TPP-001", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), false));
+        int lookupsBefore = consents.lookups.size();
+
+        assertThat(service.submitCollection(collection).paymentId()).isEqualTo(accepted.paymentId());
+        assertThat(consents.lookups).hasSize(lookupsBefore);
+    }
+
+    @Test
     void shouldServeConsentFromCacheAfterFirstLoad() {
         TestConsentPort consentPort = new TestConsentPort();
         TestCachePort cachePort = new TestCachePort();

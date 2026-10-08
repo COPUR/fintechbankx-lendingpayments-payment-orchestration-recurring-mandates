@@ -298,6 +298,23 @@ class RecurringMandatesServiceIT {
     }
 
     @Test
+    void aRetryAfterTheMandateWasRevokedGetsTheStoredResultNotA403() throws Exception {
+        String consentId = createConsent("5000.00", null);
+        String first = submit(consentId, "IDEMP-REV-RT-1", "100.00");
+        mvc.perform(asTpp(delete("/open-finance/v1/vrp/payment-consents/{id}", consentId)).param("reason", "Customer request"))
+                .andExpect(status().isNoContent());
+
+        MvcResult replay = mvc.perform(paymentRequest(consentId, "IDEMP-REV-RT-1", "100.00", TPP))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("X-OF-Idempotency", "HIT"))
+                .andReturn();
+        assertThat(paymentId(replay)).isEqualTo(first);
+        mvc.perform(paymentRequest(consentId, "IDEMP-REV-RT-2", "100.00", TPP))
+                .andExpect(status().isForbidden());
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_payment", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
     void concurrentRequestsWithTheSameIdempotencyKeyCreateOnePayment() throws Exception {
         String consentId = createConsent("5000.00", null);
 
