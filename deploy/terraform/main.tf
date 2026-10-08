@@ -3,6 +3,15 @@
 # IRSA role its pods use and their MSK produce rights. Shared platform pieces
 # (log group, SSM parameters, runtime secret) come from the platform
 # microservice-base module.
+#
+# Secret names: <env>/<service account>/<name> (platform contract "Secret
+# stores and deploy supply chain"); the platform ESO role may read only
+# secret:<env>/* and an admission policy rejects ExternalSecrets outside
+# <env>/payment-recurring-mandates-service/.
+# Known platform issue: microservice-base (ref=main) names its runtime secret
+# "<env>-<slug>/runtime", outside that path, and still uses timestamp() in tags.
+# Platform fixes both in terraform-modules #11; this service does not read that
+# secret and does not work around it here.
 
 locals {
   service_id   = "svc-pay-recurring-mandates"
@@ -170,7 +179,8 @@ resource "aws_rds_cluster_instance" "database" {
 # role and writes {"username", "password"} here; Terraform never sees the value.
 # Read by External Secrets Operator, not by the pods.
 resource "aws_secretsmanager_secret" "app_database" {
-  name                    = "${local.name}/db-app"
+  # <env>/<service account>/db-app; "<env>-<slug>/db-app" would be refused by ESO.
+  name                    = "${var.environment}/${local.service_slug}/db-app"
   description             = "Application database credential for ${local.service_id}"
   kms_key_id              = aws_kms_key.database.arn
   recovery_window_in_days = 7

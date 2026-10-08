@@ -87,7 +87,10 @@ externalSecret:
   secretStoreRef:
     kind: ClusterSecretStore
     name: aws-secrets-manager
-  # Secrets Manager secret from deploy/terraform output app_db_secret_name.
+  # Keys must be <env>/payment-recurring-mandates-service/<name> (platform
+  # admission policy; the chart refuses anything else at render time).
+  # <env>/payment-recurring-mandates-service/db-app (runtime role password,
+  # deploy/terraform output app_db_secret_name).
   remoteSecretName: ""
   # <env>/payment-recurring-mandates-service/oidc-client, property client_secret.
   serviceClientSecretName: ""
