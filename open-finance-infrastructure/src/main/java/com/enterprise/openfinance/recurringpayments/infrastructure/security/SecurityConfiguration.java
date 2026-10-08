@@ -88,7 +88,7 @@ public class SecurityConfiguration {
                 "The token is not issued for " + audience, null);
         return jwt -> {
             List<String> aud = jwt.getAudience();
-            boolean allowed = (aud != null && aud.contains(audience)) || audience.equals(jwt.getClaimAsString("azp"));
+            boolean allowed = aud != null && aud.contains(audience);
             return allowed ? OAuth2TokenValidatorResult.success() : OAuth2TokenValidatorResult.failure(invalidAudience);
         };
     }

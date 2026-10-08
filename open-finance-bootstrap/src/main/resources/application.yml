@@ -128,7 +128,7 @@ openfinance:
 
 mandates:
   security:
-    # Tokens must carry this service id in aud (or azp).
+    # Tokens must carry this service id in aud; azp alone is not enough.
     audience: ${OIDC_AUDIENCE:svc-pay-recurring-mandates}
   accounts:
     # http: accounts API (default, fails closed). in-memory: demo accounts for local runs only.

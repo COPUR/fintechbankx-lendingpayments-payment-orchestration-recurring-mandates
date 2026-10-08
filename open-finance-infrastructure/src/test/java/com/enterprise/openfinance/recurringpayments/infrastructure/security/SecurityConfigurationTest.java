@@ -50,8 +50,11 @@ class SecurityConfigurationTest {
         assertThatThrownBy(() -> decoder.decode(token(List.of("svc-pay-request-to-pay"), "TPP-001")))
                 .isInstanceOf(JwtValidationException.class)
                 .hasMessageContaining("not issued for " + SERVICE);
-        // This service's own client-credentials token names it in azp.
-        assertThat(decoder.decode(token(List.of(), SERVICE)).getClaimAsString("azp")).isEqualTo(SERVICE);
+        // aud is required: a token whose azp is this service but whose aud does not
+        // name it (for example this service's own client-credentials token) is refused.
+        assertThatThrownBy(() -> decoder.decode(token(List.of("account"), SERVICE)))
+                .isInstanceOf(JwtValidationException.class)
+                .hasMessageContaining("not issued for " + SERVICE);
     }
 
     @Test
