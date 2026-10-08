@@ -114,10 +114,10 @@ class RecurringMandatesServiceIT {
 
     @BeforeEach
     void cleanTables() {
-        jdbc.update("delete from " + SCHEMA + ".outbox_event");
-        jdbc.update("delete from " + SCHEMA + ".vrp_idempotency_record");
-        jdbc.update("delete from " + SCHEMA + ".vrp_payment");
-        jdbc.update("delete from " + SCHEMA + ".vrp_mandate");
+        jdbc.update("delete from " + SCHEMA + ".mandate_outbox_event");
+        jdbc.update("delete from " + SCHEMA + ".mandate_idempotency_record");
+        jdbc.update("delete from " + SCHEMA + ".mandate_payment");
+        jdbc.update("delete from " + SCHEMA + ".mandate_record");
     }
 
     @Test
@@ -128,7 +128,7 @@ class RecurringMandatesServiceIT {
                 order by table_name
                 """, String.class);
 
-        assertThat(tables).containsExactly("outbox_event", "vrp_idempotency_record", "vrp_mandate", "vrp_payment");
+        assertThat(tables).containsExactly("mandate_idempotency_record", "mandate_outbox_event", "mandate_payment", "mandate_record");
     }
 
     @Test
@@ -145,21 +145,21 @@ class RecurringMandatesServiceIT {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.Data.Status").value("Revoked"));
 
-        assertThat(jdbc.queryForMap("select status, version, debtor_account_id from " + SCHEMA + ".vrp_mandate where consent_id = ?", consentId))
+        assertThat(jdbc.queryForMap("select status, version, debtor_account_id from " + SCHEMA + ".mandate_record where consent_id = ?", consentId))
                 .containsEntry("status", "REVOKED")
                 .containsEntry("version", 2L)
                 .containsEntry("debtor_account_id", "ACC-AED-ACTIVE");
-        assertThat(jdbc.queryForObject("select amount from " + SCHEMA + ".vrp_payment where payment_id = ?", BigDecimal.class, paymentId))
+        assertThat(jdbc.queryForObject("select amount from " + SCHEMA + ".mandate_payment where payment_id = ?", BigDecimal.class, paymentId))
                 .isEqualByComparingTo("1250.00");
 
         List<String> eventTypes = jdbc.queryForList(
-                "select event_type || ':' || aggregate_version from " + SCHEMA + ".outbox_event where aggregate_id = ? order by created_seq",
+                "select event_type || ':' || aggregate_version from " + SCHEMA + ".mandate_outbox_event where aggregate_id = ? order by created_seq",
                 String.class, consentId);
         assertThat(eventTypes).containsExactly(
                 "Payments.Mandate.Created.v1:0", "Payments.Mandate.PaymentAccepted.v1:1", "Payments.Mandate.Revoked.v1:2");
 
         JsonNode accepted = json.readTree(jdbc.queryForObject(
-                "select payload::text from " + SCHEMA + ".outbox_event where aggregate_id = ? and event_type = 'Payments.Mandate.PaymentAccepted.v1'",
+                "select payload::text from " + SCHEMA + ".mandate_outbox_event where aggregate_id = ? and event_type = 'Payments.Mandate.PaymentAccepted.v1'",
                 String.class, consentId));
         assertThat(accepted.get("producer").asText()).isEqualTo("svc-pay-recurring-mandates");
         assertThat(accepted.get("correlationId").asText()).isEqualTo("it-interaction-1");
@@ -177,8 +177,8 @@ class RecurringMandatesServiceIT {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value("Debtor account is not active"));
 
-        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".vrp_mandate", Integer.class)).isZero();
-        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".outbox_event", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_record", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_outbox_event", Integer.class)).isZero();
     }
 
     @Test
@@ -195,8 +195,8 @@ class RecurringMandatesServiceIT {
         mvc.perform(paymentRequest(consentId, "IDEMP-RT-1", "101.00", TPP))
                 .andExpect(status().isConflict());
 
-        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".vrp_payment", Integer.class)).isEqualTo(1);
-        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".outbox_event where event_type = 'Payments.Mandate.PaymentAccepted.v1'", Integer.class))
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_payment", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_outbox_event where event_type = 'Payments.Mandate.PaymentAccepted.v1'", Integer.class))
                 .isEqualTo(1);
     }
 
@@ -208,7 +208,7 @@ class RecurringMandatesServiceIT {
 
         assertThat(results).allSatisfy(result -> assertThat(result.getResponse().getStatus()).isEqualTo(201));
         assertThat(results.stream().map(RecurringMandatesServiceIT::paymentIdUnchecked).distinct()).hasSize(1);
-        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".vrp_payment", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_payment", Integer.class)).isEqualTo(1);
     }
 
     @Test
@@ -219,9 +219,9 @@ class RecurringMandatesServiceIT {
 
         assertThat(results).extracting(r -> r.getResponse().getStatus()).containsOnly(201, 400)
                 .filteredOn(code -> code == 201).hasSize(2);
-        assertThat(jdbc.queryForObject("select sum(amount) from " + SCHEMA + ".vrp_payment where consent_id = ?", BigDecimal.class, consentId))
+        assertThat(jdbc.queryForObject("select sum(amount) from " + SCHEMA + ".mandate_payment where consent_id = ?", BigDecimal.class, consentId))
                 .isEqualByComparingTo("4000.00");
-        assertThat(jdbc.queryForObject("select version from " + SCHEMA + ".vrp_mandate where consent_id = ?", Long.class, consentId))
+        assertThat(jdbc.queryForObject("select version from " + SCHEMA + ".mandate_record where consent_id = ?", Long.class, consentId))
                 .isEqualTo(2L);
     }
 
@@ -242,7 +242,7 @@ class RecurringMandatesServiceIT {
         mvc.perform(asTpp(get("/open-finance/v1/vrp/payment-consents/{id}", consentId)).header("x-fapi-financial-id", "TPP-002"))
                 .andExpect(status().isForbidden());
 
-        assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".vrp_mandate where consent_id = ?", String.class, consentId))
+        assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".mandate_record where consent_id = ?", String.class, consentId))
                 .isEqualTo("AUTHORISED");
     }
 
@@ -255,7 +255,7 @@ class RecurringMandatesServiceIT {
         VrpConsent staleRevoked = stale.revoke(Clock.systemUTC().instant(), "stale").mandate();
         assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> consents.save(staleRevoked)))
                 .isInstanceOf(MandateVersionConflictException.class);
-        assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".vrp_mandate where consent_id = ?", String.class, consentId))
+        assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".mandate_record where consent_id = ?", String.class, consentId))
                 .isEqualTo("AUTHORISED");
     }
 

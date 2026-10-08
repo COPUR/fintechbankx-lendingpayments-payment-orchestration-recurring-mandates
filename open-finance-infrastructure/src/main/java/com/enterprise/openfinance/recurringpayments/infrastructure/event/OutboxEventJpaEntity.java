@@ -11,12 +11,12 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Row of sc_pay_recurring_mandates.outbox_event: one envelope waiting to be
+ * Row of sc_pay_recurring_mandates.mandate_outbox_event: one envelope waiting to be
  * relayed to Kafka. Written in the mandate's transaction. A row that fails
  * maxAttempts times is parked (parked_at set) and skipped by the relay.
  */
 @Entity
-@Table(name = "outbox_event")
+@Table(name = "mandate_outbox_event")
 public class OutboxEventJpaEntity {
 
     static final int MAX_ERROR_LENGTH = 512;

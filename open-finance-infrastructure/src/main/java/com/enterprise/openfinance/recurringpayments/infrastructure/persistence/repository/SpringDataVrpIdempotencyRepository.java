@@ -19,7 +19,7 @@ public interface SpringDataVrpIdempotencyRepository
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query(value = """
-            insert into vrp_idempotency_record
+            insert into mandate_idempotency_record
                 (tpp_id, idempotency_key, request_hash, payment_id, payment_status, expires_at, created_at)
             values (:tppId, :idempotencyKey, :requestHash, :paymentId, :paymentStatus, :expiresAt, :createdAt)
             on conflict (tpp_id, idempotency_key) do update
@@ -28,7 +28,7 @@ public interface SpringDataVrpIdempotencyRepository
                    payment_status = excluded.payment_status,
                    expires_at = excluded.expires_at,
                    created_at = excluded.created_at
-             where vrp_idempotency_record.expires_at <= excluded.created_at
+             where mandate_idempotency_record.expires_at <= excluded.created_at
             """, nativeQuery = true)
     int claim(@Param("tppId") String tppId,
               @Param("idempotencyKey") String idempotencyKey,

@@ -9,13 +9,13 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
- * Row of sc_pay_recurring_mandates.vrp_mandate. Persistence shape only; the
+ * Row of sc_pay_recurring_mandates.mandate_record. Persistence shape only; the
  * domain VrpConsent is mapped to and from it by VrpPersistenceMapper. version
  * is the domain's optimistic-concurrency token, compared on update by
  * SpringDataVrpMandateRepository#compareAndSet (not a JPA @Version).
  */
 @Entity
-@Table(name = "vrp_mandate")
+@Table(name = "mandate_record")
 public class VrpMandateJpaEntity {
 
     @Id

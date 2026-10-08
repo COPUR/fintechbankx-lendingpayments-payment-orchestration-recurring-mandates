@@ -8,9 +8,9 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 import java.time.Instant;
 
-/** Row of sc_pay_recurring_mandates.vrp_payment. Payments are written once and never updated. */
+/** Row of sc_pay_recurring_mandates.mandate_payment. Payments are written once and never updated. */
 @Entity
-@Table(name = "vrp_payment")
+@Table(name = "mandate_payment")
 public class VrpPaymentJpaEntity {
 
     @Id

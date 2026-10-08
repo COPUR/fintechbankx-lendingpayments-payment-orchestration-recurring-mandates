@@ -10,9 +10,9 @@ import java.io.Serializable;
 import java.time.Instant;
 import java.util.Objects;
 
-/** Row of sc_pay_recurring_mandates.vrp_idempotency_record, unique per (tpp_id, idempotency_key). */
+/** Row of sc_pay_recurring_mandates.mandate_idempotency_record, unique per (tpp_id, idempotency_key). */
 @Entity
-@Table(name = "vrp_idempotency_record")
+@Table(name = "mandate_idempotency_record")
 public class VrpIdempotencyJpaEntity {
 
     @EmbeddedId

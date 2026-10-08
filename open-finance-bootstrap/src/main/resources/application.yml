@@ -3,7 +3,8 @@
 # Kubernetes Secret synced from AWS Secrets Manager); nothing secret is here.
 spring:
   application:
-    name: payment-recurring-mandates-service
+    # Naming standard: app.<context-code>.<capability>
+    name: app.pay.recurring-mandates
   threads:
     virtual:
       enabled: true

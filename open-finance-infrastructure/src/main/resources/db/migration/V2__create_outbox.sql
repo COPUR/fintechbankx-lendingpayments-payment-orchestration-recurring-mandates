@@ -3,7 +3,7 @@
 -- A row that fails mandates.outbox.relay.max-attempts times is parked
 -- (parked_at set): the relay skips it and an operator replays or discards it.
 
-CREATE TABLE outbox_event (
+CREATE TABLE mandate_outbox_event (
     event_id          UUID          PRIMARY KEY,
     created_seq       BIGINT        GENERATED ALWAYS AS IDENTITY,
     aggregate_type    VARCHAR(64)   NOT NULL,
@@ -27,8 +27,8 @@ CREATE TABLE outbox_event (
 );
 
 -- The relay reads pending rows in insertion order.
-CREATE INDEX ix_outbox_pending ON outbox_event (created_seq) WHERE published_at IS NULL AND parked_at IS NULL;
-CREATE INDEX ix_outbox_published_at ON outbox_event (published_at) WHERE published_at IS NOT NULL;
-CREATE INDEX ix_outbox_parked ON outbox_event (parked_at) WHERE parked_at IS NOT NULL;
+CREATE INDEX ix_outbox_pending ON mandate_outbox_event (created_seq) WHERE published_at IS NULL AND parked_at IS NULL;
+CREATE INDEX ix_outbox_published_at ON mandate_outbox_event (published_at) WHERE published_at IS NOT NULL;
+CREATE INDEX ix_outbox_parked ON mandate_outbox_event (parked_at) WHERE parked_at IS NOT NULL;
 
-COMMENT ON TABLE outbox_event IS 'Pending, parked and recently published mandate events; published rows purged after mandates.outbox.retention.';
+COMMENT ON TABLE mandate_outbox_event IS 'Pending, parked and recently published mandate events; published rows purged after mandates.outbox.retention.';

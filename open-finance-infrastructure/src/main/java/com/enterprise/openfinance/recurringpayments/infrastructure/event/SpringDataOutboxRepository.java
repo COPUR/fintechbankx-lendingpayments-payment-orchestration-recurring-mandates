@@ -20,7 +20,7 @@ public interface SpringDataOutboxRepository extends JpaRepository<OutboxEventJpa
 
     /** Pending rows in insertion order; parked rows are skipped. */
     @Query(value = """
-            select * from outbox_event
+            select * from mandate_outbox_event
              where published_at is null and parked_at is null
              order by created_seq
              limit :batchSize
