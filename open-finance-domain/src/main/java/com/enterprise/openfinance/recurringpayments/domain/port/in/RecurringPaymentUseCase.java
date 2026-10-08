@@ -9,17 +9,17 @@ import com.enterprise.openfinance.recurringpayments.domain.model.VrpPayment;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpConsentQuery;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpPaymentQuery;
 
-import java.util.Optional;
-
 public interface RecurringPaymentUseCase {
 
     VrpConsent createConsent(CreateVrpConsentCommand command);
 
-    Optional<VrpConsent> getConsent(GetVrpConsentQuery query);
+    /** Throws ConsentNotUsableException for an unknown mandate or another TPP's (one 403). */
+    VrpConsent getConsent(GetVrpConsentQuery query);
 
     void revokeConsent(RevokeVrpConsentCommand command);
 
     VrpCollectionResult submitCollection(SubmitVrpPaymentCommand command);
 
-    Optional<VrpPayment> getPayment(GetVrpPaymentQuery query);
+    /** Throws PaymentNotAccessibleException for an unknown payment or another TPP's (one 403). */
+    VrpPayment getPayment(GetVrpPaymentQuery query);
 }

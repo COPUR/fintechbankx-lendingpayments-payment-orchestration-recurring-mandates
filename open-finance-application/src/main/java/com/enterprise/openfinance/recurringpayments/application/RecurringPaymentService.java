@@ -110,13 +110,13 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     }
 
     @Override
-    public Optional<VrpConsent> getConsent(GetVrpConsentQuery query) {
+    public VrpConsent getConsent(GetVrpConsentQuery query) {
         Instant now = Instant.now(clock);
         String cacheKey = consentCacheKey(query.consentId(), query.tppId());
 
         Optional<VrpConsent> cached = cachePort.getConsent(cacheKey, now);
         if (cached.isPresent()) {
-            return cached;
+            return cached.orElseThrow();
         }
 
         // Unknown and another TPP's mandate get the same ConsentNotUsableException (one 403).
@@ -124,7 +124,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         loaded.ensureOwnedBy(query.tppId());
 
         cachePort.putConsent(cacheKey, loaded, now.plus(settings.cacheTtl()));
-        return Optional.of(loaded);
+        return loaded;
     }
 
     @Override
@@ -178,13 +178,13 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     }
 
     @Override
-    public Optional<VrpPayment> getPayment(GetVrpPaymentQuery query) {
+    public VrpPayment getPayment(GetVrpPaymentQuery query) {
         Instant now = Instant.now(clock);
         String cacheKey = paymentCacheKey(query.paymentId(), query.tppId());
 
         Optional<VrpPayment> cached = cachePort.getPayment(cacheKey, now);
         if (cached.isPresent()) {
-            return cached;
+            return cached.orElseThrow();
         }
 
         // Unknown and another TPP's payment get the same PaymentNotAccessibleException (one 403).
@@ -193,7 +193,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
                 query.tppId());
 
         cachePort.putPayment(cacheKey, loaded, now.plus(settings.cacheTtl()));
-        return Optional.of(loaded);
+        return loaded;
     }
 
     private VrpCollectionResult processCollectionLocked(SubmitVrpPaymentCommand command, Instant now) {

@@ -21,7 +21,6 @@ import org.springframework.http.ResponseEntity;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -67,7 +66,7 @@ class RecurringPaymentControllerUnitTest {
         assertThat(paymentResponse.getHeaders().getFirst("X-OF-Idempotency")).isEqualTo("MISS");
 
         ArgumentCaptor<GetVrpConsentQuery> consentQueryCaptor = ArgumentCaptor.forClass(GetVrpConsentQuery.class);
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.of(consent("CONS-VRP-001")));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(consent("CONS-VRP-001"));
         controller.getConsent("DPoP token", "proof", "ix-2", "TPP-001", "CONS-VRP-001", null);
         Mockito.verify(useCase).getConsent(consentQueryCaptor.capture());
         assertThat(consentQueryCaptor.getValue().consentId()).isEqualTo("CONS-VRP-001");
@@ -78,8 +77,8 @@ class RecurringPaymentControllerUnitTest {
         RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
         RecurringPaymentController controller = new RecurringPaymentController(useCase);
 
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.of(consent("CONS-VRP-001")));
-        Mockito.when(useCase.getPayment(Mockito.any())).thenReturn(Optional.of(payment("PAY-VRP-001")));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(consent("CONS-VRP-001"));
+        Mockito.when(useCase.getPayment(Mockito.any())).thenReturn(payment("PAY-VRP-001"));
 
         ResponseEntity<VrpConsentResponse> firstConsent = controller.getConsent(
                 "DPoP token",
@@ -133,12 +132,12 @@ class RecurringPaymentControllerUnitTest {
         RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
         RecurringPaymentController controller = new RecurringPaymentController(useCase);
         VrpConsent authorised = consent("CONS-VRP-001");
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.of(authorised));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(authorised);
         ResponseEntity<VrpConsentResponse> first = controller.getConsent(
                 "DPoP token", "proof", "ix-5", "TPP-001", "CONS-VRP-001", null);
 
         VrpConsent revoked = authorised.revoke(Instant.parse("2026-02-09T10:00:00Z"), "Customer request").mandate();
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.of(revoked));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(revoked);
         ResponseEntity<VrpConsentResponse> second = controller.getConsent(
                 "DPoP token", "proof", "ix-5", "TPP-001", "CONS-VRP-001", first.getHeaders().getETag());
 
@@ -172,16 +171,20 @@ class RecurringPaymentControllerUnitTest {
     }
 
     @Test
-    void shouldReturnNotFoundForMissingConsentOrPayment() {
+    void anUnknownConsentOrPaymentIsTheUseCasesRefusalNotA404() {
         RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
         RecurringPaymentController controller = new RecurringPaymentController(useCase);
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.empty());
-        Mockito.when(useCase.getPayment(Mockito.any())).thenReturn(Optional.empty());
+        Mockito.when(useCase.getConsent(Mockito.any())).thenThrow(new com.enterprise.openfinance.recurringpayments
+                .domain.exception.ConsentNotUsableException(com.enterprise.openfinance.recurringpayments.domain
+                        .exception.ConsentNotUsableException.Reason.NOT_FOUND));
+        Mockito.when(useCase.getPayment(Mockito.any())).thenThrow(new com.enterprise.openfinance.recurringpayments
+                .domain.exception.PaymentNotAccessibleException(com.enterprise.openfinance.recurringpayments.domain
+                        .exception.PaymentNotAccessibleException.Reason.NOT_FOUND));
 
-        assertThat(controller.getConsent("Bearer t", "proof", "ix-7", "TPP-001", "CONS-404", null).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
-        assertThat(controller.getPayment("Bearer t", "proof", "ix-7", "TPP-001", "PAY-404", null).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> controller.getConsent("Bearer t", "proof", "ix-7", "TPP-001", "CONS-404", null))
+                .hasMessage("Consent not found or not authorised");
+        assertThatThrownBy(() -> controller.getPayment("Bearer t", "proof", "ix-7", "TPP-001", "PAY-404", null))
+                .hasMessage("Payment not found or not authorised");
     }
 
     @Test

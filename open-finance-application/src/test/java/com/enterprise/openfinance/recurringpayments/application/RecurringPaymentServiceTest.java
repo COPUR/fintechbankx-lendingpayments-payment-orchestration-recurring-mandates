@@ -295,8 +295,10 @@ class RecurringPaymentServiceTest {
         RecurringPaymentService service = service(consentPort, new TestPaymentPort(), new TestIdempotencyPort(), cachePort, new TestLockPort());
 
         VrpConsent consent = createConsent(service);
-        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7"))).isPresent();
-        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7"))).isPresent();
+        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7")).consentId())
+                .isEqualTo(consent.consentId());
+        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7")).consentId())
+                .isEqualTo(consent.consentId());
 
         assertThat(cachePort.consentCache).isNotEmpty();
     }

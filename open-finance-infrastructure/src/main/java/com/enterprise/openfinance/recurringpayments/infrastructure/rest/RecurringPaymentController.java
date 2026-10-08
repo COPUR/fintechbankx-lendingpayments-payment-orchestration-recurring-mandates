@@ -32,7 +32,6 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
-import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
 @RestController
@@ -92,17 +91,10 @@ public class RecurringPaymentController {
 
         // The ETag is computed from the current state on every request, so a
         // revoked mandate never answers 304 with a stale tag, on any replica.
-        Optional<VrpConsentResponse> response = useCase.getConsent(new GetVrpConsentQuery(consentId, tppId, interactionId))
-                .map(VrpConsentResponse::from);
+        // Unknown and other TPPs' ids never get here: the use case throws (one 403).
+        VrpConsentResponse response = VrpConsentResponse.from(useCase.getConsent(new GetVrpConsentQuery(consentId, tppId, interactionId)));
 
-        if (response.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
-                    .header("X-FAPI-Interaction-ID", interactionId)
-                    .build();
-        }
-
-        String etag = generateEtag(response.orElseThrow().data().toString());
+        String etag = generateEtag(response.data().toString());
         if (ifNoneMatch != null && ifNoneMatch.equals(etag)) {
             return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
                     .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
@@ -115,7 +107,7 @@ public class RecurringPaymentController {
                 .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
                 .header("X-FAPI-Interaction-ID", interactionId)
                 .eTag(etag)
-                .body(response.orElseThrow());
+                .body(response);
     }
 
     @DeleteMapping("/payment-consents/{consentId}")
@@ -188,17 +180,10 @@ public class RecurringPaymentController {
 
         // The ETag is computed from the current state on every request, so a
         // revoked mandate never answers 304 with a stale tag, on any replica.
-        Optional<VrpPaymentResponse> response = useCase.getPayment(new GetVrpPaymentQuery(paymentId, tppId, interactionId))
-                .map(VrpPaymentResponse::from);
+        // Unknown and other TPPs' ids never get here: the use case throws (one 403).
+        VrpPaymentResponse response = VrpPaymentResponse.from(useCase.getPayment(new GetVrpPaymentQuery(paymentId, tppId, interactionId)));
 
-        if (response.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
-                    .header("X-FAPI-Interaction-ID", interactionId)
-                    .build();
-        }
-
-        String etag = generateEtag(response.orElseThrow().data().toString());
+        String etag = generateEtag(response.data().toString());
         if (ifNoneMatch != null && ifNoneMatch.equals(etag)) {
             return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
                     .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
@@ -211,7 +196,7 @@ public class RecurringPaymentController {
                 .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
                 .header("X-FAPI-Interaction-ID", interactionId)
                 .eTag(etag)
-                .body(response.orElseThrow());
+                .body(response);
     }
 
     private static String resolveTppId(String financialId) {
