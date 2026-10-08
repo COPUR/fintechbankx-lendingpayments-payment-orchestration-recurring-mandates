@@ -108,10 +108,10 @@ and uses `timestamp()` in tags; Platform fixes both in terraform-modules #11.
 Pod labels. The mesh NetworkPolicy `allow-egress-aurora` grants 5432 egress by
 `app.kubernetes.io/name` only, so the migration Job pod carries
 `app.kubernetes.io/name: payment-recurring-mandates-service` (the service account name)
-with `app.kubernetes.io/component: db-migration`. The API pods carry `component: api`,
+with `app.kubernetes.io/component: db-migration`. The API pods carry `component: service` (platform chart convention, cicd-templates 335a345),
 and the Deployment, Service, PDB, spread constraints and the chart's NetworkPolicy select
 on it, so none of them selects the Job pod (`scripts/ci/helm-selector-check.py`, run in
-`deploy/helm`). A Deployment's `spec.selector` is immutable: adding `component: api`
+`deploy/helm`). A Deployment's `spec.selector` is immutable: adding `component: service`
 makes `helm upgrade` of a release installed before this change fail. That is acceptable
 before the first release; any environment that already has the release must uninstall
 it (or delete the Deployment with `--cascade=orphan`) and install again.

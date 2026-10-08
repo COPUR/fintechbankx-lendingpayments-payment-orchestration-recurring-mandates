@@ -20,7 +20,7 @@ is immutable on upgrade; see the runbook, section "Database roles".
 */ -}}
 {{- define "mandates.selectorLabels" -}}
 {{ include "mandates.instanceLabels" . }}
-app.kubernetes.io/component: api
+app.kubernetes.io/component: service
 {{- end -}}
 
 {{- define "mandates.labels" -}}

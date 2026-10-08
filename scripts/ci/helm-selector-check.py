@@ -52,8 +52,8 @@ def main():
         fail(f"Job pod {NAME} is {job_pod.get(NAME)!r}, the mesh Aurora egress policy selects {service_account!r}")
     if job_pod.get(COMPONENT) != "db-migration":
         fail(f"Job pod {COMPONENT} must be db-migration, got {job_pod.get(COMPONENT)!r}")
-    if api_pod.get(NAME) != service_account or api_pod.get(COMPONENT) != "api":
-        fail(f"Deployment pods need {NAME}={service_account} and {COMPONENT}=api")
+    if api_pod.get(NAME) != service_account or api_pod.get(COMPONENT) != "service":
+        fail(f"Deployment pods need {NAME}={service_account} and {COMPONENT}=service (platform convention, cicd-templates 335a345)")
 
     if api_pod.get(SERVICE_ID) != service_id:
         fail(f"Deployment pods need {SERVICE_ID}={service_id}, got {api_pod.get(SERVICE_ID)!r}")
