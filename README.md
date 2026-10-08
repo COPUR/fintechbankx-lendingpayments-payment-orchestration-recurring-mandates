@@ -73,9 +73,14 @@ supplies only the monthly limit. A stated `PsuId` or later `ExpiryDateTime` that
 differs from the consent is 403; a `DebtorAccount` outside the consent, unknown to the
 accounts API or not usable (inactive, no debits, other currency) is always the same 400
 `DebtorAccount cannot be used for this mandate`, so the API does not reveal whether an
-account exists or whose it is; a missing or unusable consent
-is 403; a second mandate for one consent is 409; consent service down is 503. Every
-collection re-reads the consent, so a PSU who withdraws it stops further collections.
+account exists or whose it is; a `ConsentId` in a request body that the caller may not
+use (unknown, not authorised, expired, another TPP's, no `INITIATEVRP`) is always the same
+403 `Consent not found or not authorised`; a second mandate for one consent is 409;
+consent service down is 503. On path ids (`GET`/`DELETE /payment-consents/{id}`,
+`GET /payments/{id}`) an unknown id and another TPP's get the same 404 (`Consent not
+found`, `Payment not found`; ADR-025 item 5). The reason of each refusal is logged with the
+interaction id, never returned. Every collection re-reads the consent, so a PSU who
+withdraws it stops further collections.
 All remote calls run before the database transaction and the mandate lock.
 
 ### Limit rule and its scope

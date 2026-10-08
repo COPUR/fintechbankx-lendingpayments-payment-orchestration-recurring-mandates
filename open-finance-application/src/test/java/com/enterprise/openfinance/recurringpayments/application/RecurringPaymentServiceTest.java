@@ -330,16 +330,16 @@ class RecurringPaymentServiceTest {
     }
 
     @Test
-    void shouldReturnEmptyWhenConsentOrPaymentMissing() {
+    void unknownConsentOrPaymentIdIsA404() {
         RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(), new TestCachePort(), new TestLockPort());
 
-        // An unknown mandate is refused like another TPP's (one 403, no id probing).
+        // An unknown path id is answered like another TPP's: one 404 per resource type (ADR-025 item 5).
         assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery("CONS-404", "TPP-001", "ix-8")))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Consent not found or not authorised");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class).hasMessage("Consent not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND);
         assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery("PAY-404", "TPP-001", "ix-8")))
-                .isInstanceOf(ForbiddenException.class).hasMessage("Payment not found or not authorised")
-                .extracting("reason").isEqualTo(
-                        com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException.Reason.NOT_FOUND);
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException.class).hasMessage("Payment not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND);
     }
 
     @Test
@@ -356,14 +356,12 @@ class RecurringPaymentServiceTest {
         ));
 
         assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-OTHER", "ix-9")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessage("Consent not found or not authorised");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class).hasMessage("Consent not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.OTHER_TPP);
 
         assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery(result.paymentId(), "TPP-OTHER", "ix-9")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessage("Payment not found or not authorised")
-                .extracting("reason").isEqualTo(
-                        com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException.Reason.OTHER_TPP);
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException.class).hasMessage("Payment not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.OTHER_TPP);
     }
 
     @Test
@@ -372,12 +370,12 @@ class RecurringPaymentServiceTest {
         VrpConsent consent = createConsent(service);
 
         assertThatThrownBy(() -> service.revokeConsent(new RevokeVrpConsentCommand("CONS-404", "TPP-001", "ix-10", "missing")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessage("Consent not found or not authorised");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class)
+                .hasMessage("Consent not found");
 
         assertThatThrownBy(() -> service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-OTHER", "ix-10", "forbidden")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessage("Consent not found or not authorised");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class)
+                .hasMessage("Consent not found");
     }
 
     @Test

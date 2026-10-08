@@ -11,6 +11,9 @@ info:
     htm, htu, iat within 5 minutes, ath, single-use jti). A plain Bearer
     token, a missing, replayed or mismatching proof is answered 401 with
     WWW-Authenticate DPoP error="invalid_dpop_proof".
+
+
+    Change note: other-TPP resource ids answer 404 (was 403).
 servers:
   - url: https://api.example.com/open-finance/v1/vrp
     description: The service serves every path below under /open-finance/v1/vrp.
@@ -19,9 +22,10 @@ paths:
     post:
       summary: Create recurring mandate consent
       description: >-
-        A consent or mandate the caller may not use (unknown, not authorised by
-        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
-        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
+        A ConsentId the caller may not use (unknown, not authorised, another
+        TPP's) gets one body, 403 with code FORBIDDEN and message "Consent not
+        found or not authorised"; the caller's own revoked or expired mandate is
+        told so.
       operationId: createRecurringConsent
       security:
         - bearerAuth: []
@@ -57,9 +61,9 @@ paths:
     get:
       summary: Get recurring mandate consent status
       description: >-
-        A consent or mandate the caller may not use (unknown, not authorised by
-        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
-        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
+        An unknown mandate id and another TPP's get the same answer, 404 with
+        code NOT_FOUND and message "Consent not found" (ADR-025); the caller's
+        own revoked or expired mandate is told so.
       operationId: getRecurringConsent
       security:
         - bearerAuth: []
@@ -79,12 +83,14 @@ paths:
                 $ref: '#/components/schemas/ConsentResponse'
         '403':
           $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
     delete:
       summary: Revoke recurring mandate consent
       description: >-
-        A consent or mandate the caller may not use (unknown, not authorised by
-        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
-        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
+        An unknown mandate id and another TPP's get the same answer, 404 with
+        code NOT_FOUND and message "Consent not found" (ADR-025); the caller's
+        own revoked or expired mandate is told so.
       operationId: revokeRecurringConsent
       security:
         - bearerAuth: []
@@ -114,9 +120,10 @@ paths:
     post:
       summary: Execute recurring payment under mandate
       description: >-
-        A consent or mandate the caller may not use (unknown, not authorised by
-        the PSU, expired, another TPP's, or without INITIATEVRP) always gets the
-        same 403 body: code FORBIDDEN, message "Consent not found or not authorised".
+        A ConsentId the caller may not use (unknown, not authorised, another
+        TPP's) gets one body, 403 with code FORBIDDEN and message "Consent not
+        found or not authorised"; the caller's own revoked or expired mandate is
+        told so.
       operationId: executeRecurringPayment
       security:
         - bearerAuth: []
@@ -150,8 +157,8 @@ paths:
     get:
       summary: Get recurring payment status
       description: >-
-        An unknown payment id and another TPP's payment get the same 403 body:
-        code FORBIDDEN, message "Payment not found or not authorised".
+        An unknown payment id and another TPP's get the same answer, 404 with
+        code NOT_FOUND and message "Payment not found" (ADR-025).
       operationId: getRecurringPayment
       security:
         - bearerAuth: []
@@ -170,6 +177,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/PaymentResponse'
         '403':
+          $ref: '#/components/responses/Error'
+        '404':
           $ref: '#/components/responses/Error'
 components:
   responses:

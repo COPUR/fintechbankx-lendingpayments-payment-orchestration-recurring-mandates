@@ -345,53 +345,54 @@ class RecurringMandatesServiceIT {
         String consentId = createConsent("5000.00", null);
         String paymentId = submit(consentId, "IDEMP-OWN-1", "10.00");
 
-        mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payment-consents/{id}", consentId)))
-                .andExpect(status().isForbidden());
-        mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payments/{id}", paymentId)))
-                .andExpect(status().isForbidden());
-        mvc.perform(paymentRequest(consentId, "IDEMP-OWN-2", "10.00", "TPP-002"))
-                .andExpect(status().isForbidden());
-        mvc.perform(as("TPP-002", delete("/open-finance/v1/vrp/payment-consents/{id}", consentId)).param("reason", "x"))
-                .andExpect(status().isForbidden());
-        // Another TPP's mandate and an unknown one get the same 403 body on every consent endpoint,
-        // so mandate ids cannot be probed.
-        List<String> bodies = new ArrayList<>();
+        // ADR-025 item 5: on path ids, another TPP's mandate and an unknown one get the same 404
+        // ("Consent not found"), so mandate ids cannot be probed; the reason is only logged.
+        List<String> pathBodies = new ArrayList<>();
         for (String id : List.of(consentId, "CONS-NEVER-ISSUED")) {
             for (MockHttpServletRequestBuilder request : List.of(
                     as("TPP-002", get("/open-finance/v1/vrp/payment-consents/{id}", id)),
-                    as("TPP-002", delete("/open-finance/v1/vrp/payment-consents/{id}", id)).param("reason", "x"),
-                    paymentRequest(id, "IDEMP-PROBE-" + bodies.size(), "10.00", "TPP-002"))) {
-                MvcResult result = mvc.perform(request).andExpect(status().isForbidden()).andReturn();
-                com.fasterxml.jackson.databind.node.ObjectNode body =
-                        (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
-                body.remove("timestamp");
-                bodies.add(body.toString());
+                    as("TPP-002", delete("/open-finance/v1/vrp/payment-consents/{id}", id)).param("reason", "x"))) {
+                pathBodies.add(bodyWithoutTimestamp(mvc.perform(request).andExpect(status().isNotFound()).andReturn()));
             }
         }
-        assertThat(bodies).hasSize(6).containsOnly(bodies.get(0));
-        assertThat(bodies.get(0)).contains("Consent not found or not authorised");
+        assertThat(pathBodies).hasSize(4).containsOnly(pathBodies.get(0));
+        assertThat(pathBodies.get(0)).contains("\"code\":\"NOT_FOUND\"", "\"message\":\"Consent not found\"");
+        assertThat(log.getOut()).contains("Consent not found: reason=OTHER_TPP interactionId=it-interaction-1",
+                "Consent not found: reason=NOT_FOUND interactionId=it-interaction-1");
 
-        // Payments likewise: another TPP's payment and an unknown payment id get one 403 body.
+        // A ConsentId in a request body is not a path id (ADR-025 is silent on it): the one 403 stays.
+        List<String> bodyRefBodies = new ArrayList<>();
+        for (String id : List.of(consentId, "CONS-NEVER-ISSUED")) {
+            bodyRefBodies.add(bodyWithoutTimestamp(mvc.perform(
+                    paymentRequest(id, "IDEMP-PROBE-" + id, "10.00", "TPP-002")).andExpect(status().isForbidden()).andReturn()));
+        }
+        assertThat(bodyRefBodies).containsOnly(bodyRefBodies.get(0));
+        assertThat(bodyRefBodies.get(0)).contains("Consent not found or not authorised");
+
+        // Payments: another TPP's payment and an unknown payment id get one 404 body.
         List<String> paymentBodies = new ArrayList<>();
         for (String id : List.of(paymentId, "PAY-VRP-NEVER-ISSUED")) {
-            MvcResult result = mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payments/{id}", id)))
-                    .andExpect(status().isForbidden()).andReturn();
-            com.fasterxml.jackson.databind.node.ObjectNode body =
-                    (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
-            body.remove("timestamp");
-            paymentBodies.add(body.toString());
+            paymentBodies.add(bodyWithoutTimestamp(mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payments/{id}", id)))
+                    .andExpect(status().isNotFound()).andReturn()));
         }
         assertThat(paymentBodies).containsOnly(paymentBodies.get(0));
-        assertThat(paymentBodies.get(0)).contains("\"code\":\"FORBIDDEN\"", "Payment not found or not authorised");
-        assertThat(String.join("", paymentBodies)).doesNotContain("TPP", "mismatch");
-        assertThat(log.getOut()).contains("Payment refused: reason=OTHER_TPP interactionId=it-interaction-1",
-                "Payment refused: reason=NOT_FOUND interactionId=it-interaction-1");
+        assertThat(paymentBodies.get(0)).contains("\"code\":\"NOT_FOUND\"", "\"message\":\"Payment not found\"");
+        assertThat(String.join("", pathBodies) + String.join("", paymentBodies)).doesNotContain("TPP", "mismatch", "authorised");
+        assertThat(log.getOut()).contains("Payment not found: reason=OTHER_TPP interactionId=it-interaction-1",
+                "Payment not found: reason=NOT_FOUND interactionId=it-interaction-1");
         // A header naming another TPP than the token's client is refused.
         mvc.perform(asTpp(get("/open-finance/v1/vrp/payment-consents/{id}", consentId)).header("x-fapi-financial-id", "TPP-002"))
                 .andExpect(status().isForbidden());
 
         assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".mandate_record where consent_id = ?", String.class, consentId))
                 .isEqualTo("AUTHORISED");
+    }
+
+    private String bodyWithoutTimestamp(MvcResult result) throws Exception {
+        com.fasterxml.jackson.databind.node.ObjectNode body =
+                (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(result.getResponse().getContentAsString());
+        body.remove("timestamp");
+        return body.toString();
     }
 
     @Test
@@ -529,8 +530,8 @@ class RecurringMandatesServiceIT {
         String proof = ItDpop.proof("GET", url, "tok-" + TPP);
         mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("DPoP", proof)
                         .header("x-fapi-interaction-id", "it-1"))
-                .andExpect(status().isForbidden()) // past DPoP: the unknown mandate gets the one consent 403
-                .andExpect(jsonPath("$.message").value("Consent not found or not authorised"));
+                .andExpect(status().isNotFound()) // past DPoP: the unknown mandate is a 404
+                .andExpect(jsonPath("$.message").value("Consent not found"));
         mvc.perform(get(url).header("Authorization", "DPoP tok-" + TPP).header("DPoP", proof)
                         .header("x-fapi-interaction-id", "it-1"))
                 .andExpect(status().isUnauthorized());
@@ -565,8 +566,8 @@ class RecurringMandatesServiceIT {
                         .header("Authorization", "DPoP tok-" + TPP)
                         .header("DPoP", ItDpop.proof("GET", publicUrl, "tok-" + TPP))
                         .header("x-fapi-interaction-id", "it-1"))
-                .andExpect(status().isForbidden()) // past DPoP: the unknown mandate gets the one consent 403
-                .andExpect(jsonPath("$.message").value("Consent not found or not authorised"));
+                .andExpect(status().isNotFound()) // past DPoP: the unknown mandate is a 404
+                .andExpect(jsonPath("$.message").value("Consent not found"));
         // The pod-internal URL is not what the TPP signed: 401.
         mvc.perform(get("/open-finance/v1/vrp/payment-consents/CONS-ANY")
                         .header("X-Forwarded-Proto", "https").header("X-Forwarded-Host", "api.fintechbankx.example")

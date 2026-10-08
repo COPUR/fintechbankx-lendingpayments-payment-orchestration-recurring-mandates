@@ -6,6 +6,7 @@ import com.enterprise.openfinance.recurringpayments.domain.event.MandateCreated;
 import com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted;
 import com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked;
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 
@@ -157,6 +158,17 @@ public record VrpConsent(
         return status == VrpConsentStatus.REVOKED;
     }
 
+    /**
+     * For a mandate named by a path id (GET, DELETE): another TPP's mandate is
+     * answered like an unknown one, 404 "Consent not found" (ADR-025 item 5).
+     */
+    public void ensureVisibleTo(String candidateTppId) {
+        if (!belongsToTpp(candidateTppId)) {
+            throw new ConsentNotFoundException(ConsentNotFoundException.Reason.OTHER_TPP);
+        }
+    }
+
+    /** For a mandate named in a request body (a collection's ConsentId): the one consent 403. */
     public void ensureOwnedBy(String candidateTppId) {
         if (!belongsToTpp(candidateTppId)) {
             // Same answer as an unknown mandate: another TPP cannot probe mandate ids.

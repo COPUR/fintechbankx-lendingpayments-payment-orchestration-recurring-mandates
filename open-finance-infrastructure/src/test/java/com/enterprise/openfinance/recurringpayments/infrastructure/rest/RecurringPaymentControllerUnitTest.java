@@ -171,20 +171,18 @@ class RecurringPaymentControllerUnitTest {
     }
 
     @Test
-    void anUnknownConsentOrPaymentIsTheUseCasesRefusalNotA404() {
+    void anUnknownConsentOrPaymentIsTheUseCasesNotFound() {
         RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
         RecurringPaymentController controller = new RecurringPaymentController(useCase);
-        Mockito.when(useCase.getConsent(Mockito.any())).thenThrow(new com.enterprise.openfinance.recurringpayments
-                .domain.exception.ConsentNotUsableException(com.enterprise.openfinance.recurringpayments.domain
-                        .exception.ConsentNotUsableException.Reason.NOT_FOUND));
-        Mockito.when(useCase.getPayment(Mockito.any())).thenThrow(new com.enterprise.openfinance.recurringpayments
-                .domain.exception.PaymentNotAccessibleException(com.enterprise.openfinance.recurringpayments.domain
-                        .exception.PaymentNotAccessibleException.Reason.NOT_FOUND));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenThrow(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND));
+        Mockito.when(useCase.getPayment(Mockito.any())).thenThrow(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND));
 
         assertThatThrownBy(() -> controller.getConsent("Bearer t", "proof", "ix-7", "TPP-001", "CONS-404", null))
-                .hasMessage("Consent not found or not authorised");
+                .hasMessage("Consent not found");
         assertThatThrownBy(() -> controller.getPayment("Bearer t", "proof", "ix-7", "TPP-001", "PAY-404", null))
-                .hasMessage("Payment not found or not authorised");
+                .hasMessage("Payment not found");
     }
 
     @Test

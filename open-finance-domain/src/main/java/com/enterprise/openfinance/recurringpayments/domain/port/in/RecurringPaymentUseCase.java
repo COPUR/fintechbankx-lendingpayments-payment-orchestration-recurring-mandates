@@ -13,13 +13,13 @@ public interface RecurringPaymentUseCase {
 
     VrpConsent createConsent(CreateVrpConsentCommand command);
 
-    /** Throws ConsentNotUsableException for an unknown mandate or another TPP's (one 403). */
+    /** Throws ConsentNotFoundException for an unknown mandate or another TPP's (one 404, ADR-025). */
     VrpConsent getConsent(GetVrpConsentQuery query);
 
     void revokeConsent(RevokeVrpConsentCommand command);
 
     VrpCollectionResult submitCollection(SubmitVrpPaymentCommand command);
 
-    /** Throws PaymentNotAccessibleException for an unknown payment or another TPP's (one 403). */
+    /** Throws PaymentNotFoundException for an unknown payment or another TPP's (one 404, ADR-025). */
     VrpPayment getPayment(GetVrpPaymentQuery query);
 }

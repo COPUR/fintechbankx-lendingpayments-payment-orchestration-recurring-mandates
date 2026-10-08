@@ -5,7 +5,8 @@ import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpCons
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
-import com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotAccessibleException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
 import com.enterprise.openfinance.recurringpayments.domain.model.DebtorAccount;
 import com.enterprise.openfinance.recurringpayments.domain.model.MandateChange;
@@ -119,9 +120,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             return cached.orElseThrow();
         }
 
-        // Unknown and another TPP's mandate get the same ConsentNotUsableException (one 403).
-        VrpConsent loaded = loadConsent(query.consentId());
-        loaded.ensureOwnedBy(query.tppId());
+        VrpConsent loaded = findVisibleMandate(query.consentId(), query.tppId());
 
         cachePort.putConsent(cacheKey, loaded, now.plus(settings.cacheTtl()));
         return loaded;
@@ -130,8 +129,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     @Override
     public void revokeConsent(RevokeVrpConsentCommand command) {
         Instant now = Instant.now(clock);
-        VrpConsent consent = loadConsent(command.consentId());
-        consent.ensureOwnedBy(command.tppId());
+        findVisibleMandate(command.consentId(), command.tppId());
 
         // Under the mandate lock so a revocation cannot interleave with a collection.
         VrpConsent current = transactions.inTransaction(() -> lockPort.withConsentLock(command.consentId(), () -> {
@@ -187,9 +185,9 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             return cached.orElseThrow();
         }
 
-        // Unknown and another TPP's payment get the same PaymentNotAccessibleException (one 403).
+        // Unknown and another TPP's payment get the same 404 (ADR-025 item 5).
         VrpPayment loaded = validatePaymentAccess(paymentPort.findById(query.paymentId())
-                .orElseThrow(() -> new PaymentNotAccessibleException(PaymentNotAccessibleException.Reason.NOT_FOUND)),
+                .orElseThrow(() -> new PaymentNotFoundException(PaymentNotFoundException.Reason.NOT_FOUND)),
                 query.tppId());
 
         cachePort.putPayment(cacheKey, loaded, now.plus(settings.cacheTtl()));
@@ -268,6 +266,15 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
                 .orElseThrow(() -> new ConsentNotUsableException(ConsentNotUsableException.Reason.NOT_FOUND));
     }
 
+    /** A mandate named by a path id: unknown and another TPP's are the same 404 (ADR-025 item 5). */
+    private VrpConsent findVisibleMandate(String consentId, String tppId) {
+        VrpConsent mandate = consentPort.findById(consentId)
+                .orElseThrow(() -> new ConsentNotFoundException(ConsentNotFoundException.Reason.NOT_FOUND));
+        mandate.ensureVisibleTo(tppId);
+        return mandate;
+    }
+
+    /** A mandate named in a request body (a collection's ConsentId): unknown is the one consent 403. */
     private VrpConsent loadConsent(String consentId) {
         return consentPort.findById(consentId)
                 .orElseThrow(() -> new ConsentNotUsableException(ConsentNotUsableException.Reason.NOT_FOUND));
@@ -275,7 +282,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
 
     private static VrpPayment validatePaymentAccess(VrpPayment payment, String tppId) {
         if (!payment.tppId().equals(tppId)) {
-            throw new PaymentNotAccessibleException(PaymentNotAccessibleException.Reason.OTHER_TPP);
+            throw new PaymentNotFoundException(PaymentNotFoundException.Reason.OTHER_TPP);
         }
         return payment;
     }
