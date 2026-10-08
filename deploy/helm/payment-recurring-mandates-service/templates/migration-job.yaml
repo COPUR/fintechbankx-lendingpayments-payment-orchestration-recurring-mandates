@@ -52,11 +52,12 @@ spec:
   activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
   template:
     metadata:
-      # Not the Deployment's selector labels: the Service, PDB, HPA and
-      # NetworkPolicy must not select the migration pod.
+      # app.kubernetes.io/name = the service account name, so the mesh
+      # NetworkPolicy allow-egress-aurora (selects by that label only) lets
+      # the pod reach Aurora on 5432. component db-migration keeps it out of
+      # the Service, PDB, NetworkPolicy and Deployment selectors (component api).
       labels:
-        app.kubernetes.io/name: {{ include "mandates.migrationName" . }}
-        app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- include "mandates.instanceLabels" . | nindent 8 }}
         app.kubernetes.io/component: db-migration
         fintechbankx.io/service-id: {{ index .Values.podLabels "fintechbankx.io/service-id" }}
         sidecar.istio.io/inject: {{ .Values.migration.istioSidecar | quote }}

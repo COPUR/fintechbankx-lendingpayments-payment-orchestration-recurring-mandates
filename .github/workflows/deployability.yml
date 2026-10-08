@@ -34,6 +34,10 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet pyyaml==6.0.2
       - name: Lint and render chart
         run: |
           chart=deploy/helm/payment-recurring-mandates-service
@@ -83,6 +87,10 @@ jobs:
           if helm template ci "$chart" $args --set externalSecret.remoteSecretName=dev-$sa/db-app > /dev/null 2>&1; then
             echo "chart rendered a remoteRef key outside <env>/$sa/" >&2; exit 1
           fi
+          # Mesh egress (allow-egress-aurora) selects app.kubernetes.io/name only: the hook Job pod
+          # carries the SA name; component labels keep it out of the API pods' selectors.
+          python scripts/ci/helm-selector-check.py "$sa" <<<"$rendered"
+          helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa"
       - name: Missing required config fails the render
         run: |
           if helm template ci deploy/helm/payment-recurring-mandates-service \

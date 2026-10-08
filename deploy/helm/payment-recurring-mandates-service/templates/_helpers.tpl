@@ -2,13 +2,29 @@
 {{- .Chart.Name -}}
 {{- end -}}
 
-{{- define "mandates.selectorLabels" -}}
+{{- /*
+Name and instance, shared by the API pods and the db-migration Job pod. The
+mesh NetworkPolicies grant datastore egress (Aurora 5432) by
+app.kubernetes.io/name only, so both pods carry the service account name there
+and app.kubernetes.io/component tells them apart.
+*/ -}}
+{{- define "mandates.instanceLabels" -}}
 app.kubernetes.io/name: {{ include "mandates.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{- /*
+Selects the API pods only (Deployment, Service, PDB, spread constraints,
+NetworkPolicy), never the db-migration Job pod. Changing a Deployment selector
+is immutable on upgrade; see the runbook, section "Database roles".
+*/ -}}
+{{- define "mandates.selectorLabels" -}}
+{{ include "mandates.instanceLabels" . }}
+app.kubernetes.io/component: api
+{{- end -}}
+
 {{- define "mandates.labels" -}}
-{{ include "mandates.selectorLabels" . }}
+{{ include "mandates.instanceLabels" . }}
 app: {{ include "mandates.name" . }}
 app.kubernetes.io/part-of: fintechbankx-payments
 fintechbankx.io/service-id: svc-pay-recurring-mandates

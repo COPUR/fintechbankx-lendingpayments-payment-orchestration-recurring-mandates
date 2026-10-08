@@ -105,6 +105,17 @@ it explicitly. Pending on the platform side, not worked around here: microservic
 (terraform-modules, ref=main) still names its runtime secret `<env>-<slug>/runtime`
 and uses `timestamp()` in tags; Platform fixes both in terraform-modules #11.
 
+Pod labels. The mesh NetworkPolicy `allow-egress-aurora` grants 5432 egress by
+`app.kubernetes.io/name` only, so the migration Job pod carries
+`app.kubernetes.io/name: payment-recurring-mandates-service` (the service account name)
+with `app.kubernetes.io/component: db-migration`. The API pods carry `component: api`,
+and the Deployment, Service, PDB, spread constraints and the chart's NetworkPolicy select
+on it, so none of them selects the Job pod (`scripts/ci/helm-selector-check.py`, run in
+`deploy/helm`). A Deployment's `spec.selector` is immutable: adding `component: api`
+makes `helm upgrade` of a release installed before this change fail. That is acceptable
+before the first release; any environment that already has the release must uninstall
+it (or delete the Deployment with `--cascade=orphan`) and install again.
+
 ### Requests to the mesh team
 
 Raise these in `fintechbankx-platform-mesh-security-service-mesh` (owner: platform mesh
@@ -130,10 +141,15 @@ exported to `payments`).**
 | Amazon MSK | broker hostnames of the IAM listener (`KAFKA_BOOTSTRAP_SERVERS`) | 9098 `TLS` | outbox relay (IAM auth via IRSA); needed before `OUTBOX_RELAY_ENABLED=true` |
 | AWS STS (regional endpoint) | `sts.<region>.amazonaws.com` | 443 `TLS` | IRSA web-identity exchange used by the MSK IAM client |
 
-The Flyway migration Job (Helm hook) runs without a sidecar by default
-(`migration.istioSidecar: false`), so it is not subject to the egress policy and only
-reaches Aurora; tell the mesh team if the cluster runs native sidecars, then turn the
-sidecar on.
+The Flyway migration Job (Helm hook) also needs Aurora 5432 egress. It runs without a
+sidecar by default (`migration.istioSidecar: false`, a classic sidecar never exits), so
+the ServiceEntry does not apply to it, but the namespace NetworkPolicies do: it reaches
+Aurora only through `allow-egress-aurora`, which selects `app.kubernetes.io/name:
+payment-recurring-mandates-service` (the chart gives the Job pod that label, see
+"Database roles"). The mesh contract's workload entry for this service account
+declares `datastores: [aurora-postgresql, msk]` (mesh repository
+`contracts/mesh-contract.yaml`, platform branch, not yet merged). Tell the mesh team if the cluster runs native sidecars, then turn
+the sidecar on.
 
 **C. Callee ALLOW rules (this service as the caller, principal
 `cluster.local/ns/payments/sa/payment-recurring-mandates-service`).**
