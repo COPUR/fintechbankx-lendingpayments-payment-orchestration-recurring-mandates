@@ -35,6 +35,10 @@ public interface SpringDataOutboxRepository extends JpaRepository<OutboxEventJpa
             """, nativeQuery = true)
     List<OutboxEventJpaEntity> findUnpublishedBatch(@Param("batchSize") int batchSize);
 
+    /** Parked rows not yet counted in outbox_parked_events_total: operator parks done in SQL. */
+    @Query("select e from OutboxEventJpaEntity e where e.parkedAt is not null and e.parkCounted = false")
+    List<OutboxEventJpaEntity> findUncountedParks();
+
     @Modifying
     @Query("delete from OutboxEventJpaEntity e where e.publishedAt < :before")
     int deletePublishedBefore(@Param("before") Instant before);

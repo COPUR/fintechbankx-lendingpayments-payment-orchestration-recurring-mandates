@@ -373,6 +373,8 @@ class RecurringMandatesServiceIT {
         OutboxRelay relay = relay();
 
         assertThat(relay.relayOnce()).isEqualTo(1); // payload error parks at once; only the other mandate flows
+        assertThat(jdbc.queryForObject("select park_counted from " + SCHEMA + ".mandate_outbox_event where parked_at is not null",
+                Boolean.class)).as("counted when the relay parked it").isTrue();
         assertThat(relay.relayOnce()).isZero();     // the parked mandate stays blocked across runs
 
         assertThat(outbox.countParked()).isEqualTo(1);
@@ -432,7 +434,13 @@ class RecurringMandatesServiceIT {
 
         Mockito.reset(kafka);
         when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture((SendResult<String, String>) null));
-        assertThat(relay().relayOnce()).isEqualTo(1); // only the other mandate; the parked mandate stays held back
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry meters = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        OutboxRelay countingRelay = new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager),
+                Clock.systemUTC(), 100, Duration.ofSeconds(5), Duration.ofDays(7), meters);
+        assertThat(countingRelay.relayOnce()).isEqualTo(1); // only the other mandate; the parked mandate stays held back
+        assertThat(countingRelay.relayOnce()).isZero();
+        assertThat(meters.get("outbox.parked.events").tag("exception", "OperatorPark").counter().count())
+                .as("the operator park is counted once, not on every run").isEqualTo(1);
         ArgumentCaptor<ProducerRecord<String, String>> records = ArgumentCaptor.forClass(ProducerRecord.class);
         Mockito.verify(kafka).send(records.capture());
         assertThat(records.getValue().key()).isEqualTo(other);

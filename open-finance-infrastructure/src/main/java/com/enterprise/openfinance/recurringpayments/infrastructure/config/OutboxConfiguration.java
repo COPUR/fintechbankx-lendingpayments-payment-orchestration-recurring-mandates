@@ -29,11 +29,12 @@ public class OutboxConfiguration {
     }
 
     /**
-     * Platform metric names: outbox_pending_events, outbox_parked_events (alert
-     * on any: events that need an operator), outbox_oldest_pending_age_seconds
+     * Platform metric names (Kafka guide 5f7d546): outbox_oldest_pending_age_seconds
      * (the stalled-relay alert: non-payload failures never park, so this age
-     * shows a broker, egress or authorisation problem) and
-     * outbox_send_failures_total{exception} (registered by OutboxRelay).
+     * shows a broker, egress or authorisation problem), and the counters
+     * outbox_send_failures_total{exception} and outbox_parked_events_total{exception}
+     * (alert on any increase), registered by OutboxRelay. Service gauges:
+     * outbox_pending_events and outbox_parked_rows (rows parked right now).
      */
     @Bean
     Gauge outboxPendingGauge(MeterRegistry registry, SpringDataOutboxRepository outbox) {
@@ -44,7 +45,9 @@ public class OutboxConfiguration {
 
     @Bean
     Gauge outboxParkedGauge(MeterRegistry registry, SpringDataOutboxRepository outbox) {
-        return Gauge.builder("outbox.parked.events", outbox, SpringDataOutboxRepository::countParked)
+        // Not "outbox.parked.events": that is the counter (outbox_parked_events_total) and
+        // Prometheus refuses a gauge and a counter sharing a base name.
+        return Gauge.builder("outbox.parked.rows", outbox, SpringDataOutboxRepository::countParked)
                 .description("Mandate events parked (payload error, or by an operator with a reason)")
                 .register(registry);
     }

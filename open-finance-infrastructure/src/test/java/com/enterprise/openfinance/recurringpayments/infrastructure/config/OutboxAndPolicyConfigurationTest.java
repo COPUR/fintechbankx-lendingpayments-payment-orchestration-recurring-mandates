@@ -38,7 +38,7 @@ class OutboxAndPolicyConfigurationTest {
         configuration.outboxOldestPendingAgeGauge(registry, outbox, clock);
 
         assertThat(registry.get("outbox.pending.events").gauge().value()).isEqualTo(4d);
-        assertThat(registry.get("outbox.parked.events").gauge().value()).isEqualTo(1d);
+        assertThat(registry.get("outbox.parked.rows").gauge().value()).isEqualTo(1d);
         assertThat(registry.get("outbox.oldest.pending.age.seconds").gauge().value()).isEqualTo(90d);
 
         when(outbox.oldestPendingOccurredAt()).thenReturn(null);

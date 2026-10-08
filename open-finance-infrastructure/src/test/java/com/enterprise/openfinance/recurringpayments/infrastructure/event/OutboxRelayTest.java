@@ -122,6 +122,33 @@ class OutboxRelayTest {
     }
 
     @Test
+    void anOperatorParkIsCountedOnceByTheRelay() {
+        OutboxEventJpaEntity operatorParked = row("CONS-1");
+        // What the runbook's operator SQL leaves behind: parked with a reason, not yet counted.
+        org.springframework.test.util.ReflectionTestUtils.setField(operatorParked, "parkedAt", NOW);
+        org.springframework.test.util.ReflectionTestUtils.setField(operatorParked, "parkedReason", "operator: INC-1 ACL");
+        when(outbox.tryRelayLock(OutboxRelay.RELAY_LOCK_KEY)).thenReturn(true);
+        when(outbox.findUncountedParks()).thenReturn(List.of(operatorParked)).thenReturn(List.of());
+        OutboxRelay relay = relay(new MutableClock(NOW));
+
+        relay.relayOnce();
+        relay.relayOnce();
+
+        assertThat(operatorParked.isParkCounted()).isTrue();
+        assertThat(registry.get("outbox.parked.events").tag("exception", "OperatorPark").counter().count()).isEqualTo(1);
+    }
+
+    @Test
+    void parksAreNotCountedByAReplicaWithoutTheRelayLock() {
+        when(outbox.tryRelayLock(OutboxRelay.RELAY_LOCK_KEY)).thenReturn(false);
+
+        relay().relayOnce();
+
+        verify(outbox, never()).findUncountedParks();
+        assertThat(registry.find("outbox.parked.events").counters()).isEmpty();
+    }
+
+    @Test
     void retriableFailuresNeverParkStopTheBatchAndMarkNothing() {
         OutboxEventJpaEntity stuck = row("CONS-1");
         OutboxEventJpaEntity later = row("CONS-2");

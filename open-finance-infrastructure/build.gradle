@@ -50,6 +50,8 @@ dependencies {
     testImplementation 'org.assertj:assertj-core'
     testImplementation 'org.mockito:mockito-core'
     testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
+    // Proves the outbox meters coexist under their Prometheus names (OutboxMetricsPrometheusTest).
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
 }
 
 jacoco {
