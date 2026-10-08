@@ -25,8 +25,8 @@ import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpLockPort;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpPaymentPort;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpConsentQuery;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpPaymentQuery;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateTransactions;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -38,9 +38,12 @@ import java.util.UUID;
  * the change, saves it and hands the aggregate's events to the outbox in the
  * same transaction. Collections run under a per-mandate lock so the monthly
  * total is read and extended by one request at a time.
+ *
+ * Remote calls (accounts) run first, outside any transaction and lock, so a
+ * slow dependency never holds a database connection or blocks the mandate;
+ * only then does {@link MandateTransactions} open the transaction.
  */
 @Service
-@Transactional(readOnly = true)
 public class RecurringPaymentService implements RecurringPaymentUseCase {
 
     private final VrpConsentPort consentPort;
@@ -50,6 +53,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     private final VrpLockPort lockPort;
     private final MandateEventPublisher eventPublisher;
     private final DebtorAccountPort debtorAccountPort;
+    private final MandateTransactions transactions;
     private final VrpSettings settings;
     private final Clock clock;
 
@@ -60,6 +64,7 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
                                    VrpLockPort lockPort,
                                    MandateEventPublisher eventPublisher,
                                    DebtorAccountPort debtorAccountPort,
+                                   MandateTransactions transactions,
                                    VrpSettings settings,
                                    Clock clock) {
         this.consentPort = consentPort;
@@ -69,12 +74,12 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         this.lockPort = lockPort;
         this.eventPublisher = eventPublisher;
         this.debtorAccountPort = debtorAccountPort;
+        this.transactions = transactions;
         this.settings = settings;
         this.clock = clock;
     }
 
     @Override
-    @Transactional
     public VrpConsent createConsent(CreateVrpConsentCommand command) {
         Instant now = Instant.now(clock);
         if (command.debtorAccountId() != null) {
@@ -82,8 +87,11 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         }
 
         MandateChange change = VrpConsent.authorise("CONS-VRP-" + UUID.randomUUID(), command, now);
-        VrpConsent saved = consentPort.save(change.mandate());
-        eventPublisher.publish(change.events());
+        VrpConsent saved = transactions.inTransaction(() -> {
+            VrpConsent mandate = consentPort.save(change.mandate());
+            eventPublisher.publish(change.events());
+            return mandate;
+        });
 
         cachePort.putConsent(consentCacheKey(saved.consentId(), saved.tppId()), saved, now.plus(settings.cacheTtl()));
         return saved;
@@ -110,14 +118,13 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     }
 
     @Override
-    @Transactional
     public void revokeConsent(RevokeVrpConsentCommand command) {
         Instant now = Instant.now(clock);
         VrpConsent consent = loadConsent(command.consentId());
         consent.ensureOwnedBy(command.tppId());
 
         // Under the mandate lock so a revocation cannot interleave with a collection.
-        VrpConsent current = lockPort.withConsentLock(command.consentId(), () -> {
+        VrpConsent current = transactions.inTransaction(() -> lockPort.withConsentLock(command.consentId(), () -> {
             VrpConsent fresh = loadConsent(command.consentId());
             MandateChange change = fresh.revoke(now, command.reason());
             if (!change.changed()) {
@@ -126,14 +133,13 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             VrpConsent saved = consentPort.save(change.mandate());
             eventPublisher.publish(change.events());
             return saved;
-        });
+        }));
 
         cachePort.putConsent(consentCacheKey(current.consentId(), current.tppId()), current,
                 now.plus(settings.cacheTtl()));
     }
 
     @Override
-    @Transactional
     public VrpCollectionResult submitCollection(SubmitVrpPaymentCommand command) {
         Instant now = Instant.now(clock);
 
@@ -145,7 +151,14 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
             return replay.orElseThrow();
         }
 
-        return lockPort.withConsentLock(command.consentId(), () -> processCollectionLocked(command, now));
+        // Remote check before the transaction and the lock; the debtor account of a
+        // mandate never changes, so the locked re-read below cannot invalidate it.
+        if (consent.debtorAccountId() != null) {
+            verifyDebtorAccount(consent.debtorAccountId(), consent.currency());
+        }
+
+        return transactions.inTransaction(() ->
+                lockPort.withConsentLock(command.consentId(), () -> processCollectionLocked(command, now)));
     }
 
     @Override
@@ -174,9 +187,6 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
         // Re-read inside the lock: a revocation may have committed while we waited.
         VrpConsent consent = loadConsent(command.consentId());
         consent.ensureCanCollect(command, now);
-        if (consent.debtorAccountId() != null) {
-            verifyDebtorAccount(consent.debtorAccountId(), consent.currency());
-        }
 
         var acceptedInPeriod = paymentPort.sumAcceptedAmountByConsentAndPeriod(
                 command.consentId(), VrpConsent.periodKeyOf(now));

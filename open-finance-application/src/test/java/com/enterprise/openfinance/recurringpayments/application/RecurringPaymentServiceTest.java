@@ -20,6 +20,7 @@ import com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentA
 import com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked;
 import com.enterprise.openfinance.recurringpayments.domain.model.DebtorAccount;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.DebtorAccountPort;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateTransactions;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateEventPublisher;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpCachePort;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpConsentPort;
@@ -57,6 +58,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RecurringPaymentServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-02-09T10:00:00Z"), ZoneOffset.UTC);
+    private static final CountingTransactions TRANSACTIONS = new CountingTransactions();
+
+    /** Counts open transactions per thread, like a thread-bound Spring transaction. */
+    private static final class CountingTransactions implements MandateTransactions {
+        private final ThreadLocal<Integer> open = ThreadLocal.withInitial(() -> 0);
+
+        @Override
+        public <T> T inTransaction(java.util.function.Supplier<T> work) {
+            open.set(open.get() + 1);
+            try {
+                return work.get();
+            } finally {
+                open.set(open.get() - 1);
+            }
+        }
+
+        boolean active() {
+            return open.get() > 0;
+        }
+    }
 
     @Test
     void shouldCreateAuthorisedConsent() {
@@ -463,6 +484,38 @@ class RecurringPaymentServiceTest {
                 .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
     }
 
+    @Test
+    void remoteAccountChecksRunBeforeAnyTransactionOrMandateLock() {
+        AtomicInteger locksHeld = new AtomicInteger();
+        List<Integer> locksHeldDuringRemoteCalls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VrpLockPort countingLock = new VrpLockPort() {
+            @Override
+            public <T> T withConsentLock(String consentId, java.util.function.Supplier<T> operation) {
+                locksHeld.incrementAndGet();
+                try {
+                    return operation.get();
+                } finally {
+                    locksHeld.decrementAndGet();
+                }
+            }
+        };
+        List<Boolean> transactionOpenDuringRemoteCalls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        DebtorAccountPort accounts = accountId -> {
+            locksHeldDuringRemoteCalls.add(locksHeld.get());
+            transactionOpenDuringRemoteCalls.add(TRANSACTIONS.active());
+            return Optional.of(new DebtorAccount(accountId, true, true, "AED"));
+        };
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), countingLock, new RecordingEventPublisher(), accounts);
+
+        VrpConsent mandate = service.createConsent(consentCommand("ACC-ACTIVE"));
+        service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", mandate.consentId(), "IDEMP-REMOTE-1",
+                new BigDecimal("10.00"), "AED", "ix-remote"));
+
+        assertThat(locksHeldDuringRemoteCalls).hasSize(2).containsOnly(0);
+        assertThat(transactionOpenDuringRemoteCalls).hasSize(2).containsOnly(false);
+    }
+
     private static CreateVrpConsentCommand consentCommand(String debtorAccountId) {
         return new CreateVrpConsentCommand("TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED",
                 Instant.parse("2099-01-01T00:00:00Z"), "ix-create", debtorAccountId);
@@ -549,6 +602,7 @@ class RecurringPaymentServiceTest {
                 lockPort,
                 eventPublisher,
                 debtorAccountPort,
+                TRANSACTIONS,
                 new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30)),
                 CLOCK
         );

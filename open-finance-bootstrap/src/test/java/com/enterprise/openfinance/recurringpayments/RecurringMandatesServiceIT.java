@@ -93,6 +93,9 @@ class RecurringMandatesServiceIT {
     @Autowired SpringDataOutboxRepository outbox;
     @Autowired PlatformTransactionManager transactionManager;
     @MockBean KafkaTemplate<String, String> kafka;
+    @org.springframework.boot.test.mock.mockito.SpyBean
+    com.enterprise.openfinance.recurringpayments.domain.port.out.DebtorAccountPort debtorAccounts;
+    @Autowired javax.sql.DataSource dataSource;
     // The real decoder (issuer + audience validation) is covered by SecurityConfigurationTest;
     // here a token "tok-<client>" stands for a valid Keycloak token of that TPP client.
     @MockBean JwtDecoder jwtDecoder;
@@ -365,6 +368,23 @@ class RecurringMandatesServiceIT {
                         .header("DPoP", ItDpop.proof("GET", "http://localhost/open-finance/v1/vrp/payment-consents/CONS-ANY", "tok-" + TPP))
                         .header("x-fapi-interaction-id", "it-1"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void remoteCallsHoldNoTransactionAndNoDatabaseConnection() throws Exception {
+        List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        com.zaxxer.hikari.HikariPoolMXBean pool = dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class)
+                .getHikariPoolMXBean();
+        Mockito.doAnswer(invocation -> {
+            seen.add("tx=" + org.springframework.transaction.support.TransactionSynchronizationManager
+                    .isActualTransactionActive() + ",connections=" + pool.getActiveConnections());
+            return invocation.callRealMethod();
+        }).when(debtorAccounts).findDebtorAccount(anyString());
+
+        String consentId = createConsent("5000.00", "ACC-AED-ACTIVE");
+        submit(consentId, "IDEMP-REMOTE-1", "10.00");
+
+        assertThat(seen).hasSize(2).containsOnly("tx=false,connections=0");
     }
 
     @Test
