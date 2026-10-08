@@ -17,3 +17,6 @@ data:
   {{- range $key, $value := .Values.config }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
+  # Micrometer common tags (platform convention): app = service account, squad = namespace.
+  METRICS_TAG_APP: {{ .Values.serviceAccount.name | quote }}
+  METRICS_TAG_SQUAD: {{ .Release.Namespace | quote }}

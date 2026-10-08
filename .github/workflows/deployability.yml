@@ -94,6 +94,9 @@ jobs:
           if grep -qE 'kind: PrometheusRule|outbox_parked' <<<"$rendered"; then
             echo "the chart renders its own outbox alert rule; use the platform OutboxEventsParked" >&2; exit 1
           fi
+          # Micrometer common tags: squad = the release namespace, app = the service account.
+          grep -q 'METRICS_TAG_SQUAD: "payments"' <<<"$rendered"
+          grep -q "METRICS_TAG_APP: \"$sa\"" <<<"$rendered"
           python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates <<<"$rendered"
           helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates
       - name: Missing required config fails the render

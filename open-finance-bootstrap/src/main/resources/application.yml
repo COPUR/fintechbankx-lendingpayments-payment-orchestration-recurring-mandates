@@ -121,8 +121,13 @@ management:
         liveness:
           include: livenessState
   metrics:
+    # Platform common tags: service id, service account (app) and namespace
+    # (squad; the outbox alerts route on it). The chart sets the last two from
+    # serviceAccount.name and the release namespace.
     tags:
       service: svc-pay-recurring-mandates
+      app: ${METRICS_TAG_APP:payment-recurring-mandates-service}
+      squad: ${METRICS_TAG_SQUAD:payments}
     distribution:
       percentiles-histogram:
         http.server.requests: true
