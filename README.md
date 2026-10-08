@@ -27,7 +27,7 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | review_cadence | quarterly |
 | data_owner | svc-pay-recurring-mandates (`sc_pay_recurring_mandates`) |
 | upstream_dependencies | Keycloak realm `fintechbankx` (TPP tokens, client credentials); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` |
-| published_events | `evt.pay.mandate.created.v1` (`Payments.Mandate.Created.v1`), `evt.pay.mandate.revoked.v1` (`Payments.Mandate.Revoked.v1`), `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.PaymentAccepted.v1`); DLQ reserved `evt.pay.mandate.dlq.v1` |
+| published_events | `evt.pay.mandate.created.v1` (`Payments.Mandate.Created.v1`), `evt.pay.mandate.revoked.v1` (`Payments.Mandate.Revoked.v1`), `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.PaymentAccepted.v1`); no DLQ: dead-letter topics are owned by the consuming service (ADR-019/024) |
 | consumed_events | none |
 
 ### Run, test, deploy

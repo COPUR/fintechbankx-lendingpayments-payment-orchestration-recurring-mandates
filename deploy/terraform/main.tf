@@ -230,6 +230,13 @@ resource "aws_iam_role_policy" "workload" {
 locals {
   msk_topic_arn_prefix = var.msk_cluster_arn == "" ? "" : replace(var.msk_cluster_arn, ":cluster/", ":topic/")
   msk_group_arn_prefix = var.msk_cluster_arn == "" ? "" : replace(var.msk_cluster_arn, ":cluster/", ":group/")
+  # Exactly the topics in api/asyncapi/svc-pay-recurring-mandates.yaml. No DLQ:
+  # dead-letter topics belong to consumers (ADR-019/024).
+  published_topics = [
+    "evt.pay.mandate.created.v1",
+    "evt.pay.mandate.revoked.v1",
+    "evt.pay.mandate.payment-accepted.v1",
+  ]
 }
 
 data "aws_iam_policy_document" "msk" {
@@ -248,7 +255,7 @@ data "aws_iam_policy_document" "msk" {
       "kafka-cluster:WriteData",
       "kafka-cluster:WriteDataIdempotently",
     ]
-    resources = ["${local.msk_topic_arn_prefix}/evt.pay.mandate.*"]
+    resources = [for topic in local.published_topics : "${local.msk_topic_arn_prefix}/${topic}"]
   }
 
   statement {

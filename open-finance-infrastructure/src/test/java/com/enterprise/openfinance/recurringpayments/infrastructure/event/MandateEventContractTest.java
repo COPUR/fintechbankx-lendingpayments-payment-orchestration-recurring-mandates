@@ -55,6 +55,11 @@ class MandateEventContractTest {
 
         List<String> specTopics = new ArrayList<>();
         channels.values().forEach(channel -> specTopics.add((String) channel.get("address")));
+        // Provider spec: only the topics this service publishes. DLQs are consumer-owned
+        // (ADR-019/024) and this service has no consumers.
+        assertThat(specTopics).containsExactlyInAnyOrder("evt.pay.mandate.created.v1", "evt.pay.mandate.revoked.v1",
+                "evt.pay.mandate.payment-accepted.v1");
+        assertThat(messages).doesNotContainKey("DeadLetter");
 
         for (MandateEvent event : events) {
             OutboxEventJpaEntity row = factory.toOutboxRow(event, "ix-contract");

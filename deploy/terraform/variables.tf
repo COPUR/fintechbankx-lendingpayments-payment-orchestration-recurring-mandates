@@ -120,6 +120,6 @@ variable "tags" {
 
 variable "msk_cluster_arn" {
   type        = string
-  description = "ARN of the platform MSK cluster; grants IAM produce rights on evt.pay.mandate.* to the pods. Empty skips the policy."
+  description = "ARN of the platform MSK cluster; grants IAM produce rights on the three evt.pay.mandate.*.v1 topics to the pods. Empty skips the policy."
   default     = ""
 }

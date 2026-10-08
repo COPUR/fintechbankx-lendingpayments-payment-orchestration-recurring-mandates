@@ -95,25 +95,6 @@ channels:
     messages:
       MandatePaymentAccepted:
         $ref: '#/components/messages/MandatePaymentAccepted'
-  deadLetter:
-    address: evt.pay.mandate.dlq.v1
-    title: evt.pay.mandate.dlq.v1
-    description: Dead-letter topic for the evt.pay.mandate namespace. Written by consumers (not by svc-pay-recurring-mandates)
-      after bounded retries; replayed by the owning consumer squad.
-    bindings:
-      kafka:
-        topic: evt.pay.mandate.dlq.v1
-        partitions: 3
-        replicas: 3
-        topicConfiguration:
-          cleanup.policy:
-          - delete
-          retention.ms: 1209600000
-          max.message.bytes: 1048576
-        bindingVersion: 0.5.0
-    messages:
-      DeadLetter:
-        $ref: '#/components/messages/DeadLetter'
 operations:
   publishMandateCreated:
     action: send
@@ -145,8 +126,6 @@ components:
       $ref: ./common/event-envelope.yaml#/EventEnvelope
     EventHeaders:
       $ref: ./common/event-envelope.yaml#/EventHeaders
-    DeadLetterHeaders:
-      $ref: ./common/event-envelope.yaml#/DeadLetterHeaders
     MonetaryAmount:
       $ref: ./common/event-envelope.yaml#/MonetaryAmount
     MandateCreatedData:
@@ -326,21 +305,6 @@ components:
             description: aggregateId (mandate id).
           bindingVersion: 0.5.0
       x-source-class: com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted
-    DeadLetter:
-      name: DeadLetter
-      title: Dead letter for evt.pay.mandate
-      summary: A message from this namespace that a consumer could not process after bounded retries.
-      contentType: application/json
-      headers:
-        $ref: '#/components/schemas/DeadLetterHeaders'
-      payload:
-        $ref: '#/components/schemas/EventEnvelope'
-      bindings:
-        kafka:
-          key:
-            type: string
-            description: Original record key (aggregateId).
-          bindingVersion: 0.5.0
   securitySchemes:
     mtls:
       type: X509

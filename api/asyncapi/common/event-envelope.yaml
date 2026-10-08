@@ -90,47 +90,6 @@ EventHeaders:
       type: string
       description: W3C trace context.
 
-DeadLetterHeaders:
-  type: object
-  description: >-
-    Headers added by the consumer that moves a poison message to the
-    namespace DLQ after bounded retries. The original record value and key are
-    copied unchanged.
-  required:
-    - eventType
-    - eventId
-    - dlq-original-topic
-    - dlq-consumer-group
-    - dlq-attempts
-    - dlq-failed-at
-  properties:
-    eventType:
-      type: string
-    eventId:
-      type: string
-      format: uuid
-    correlationId:
-      type: string
-    dlq-original-topic:
-      type: string
-    dlq-original-partition:
-      type: integer
-    dlq-original-offset:
-      type: integer
-      format: int64
-    dlq-consumer-group:
-      type: string
-      description: 'Consumer group that gave up, cg.<service-id>.<purpose>.v<major>.'
-    dlq-attempts:
-      type: integer
-      minimum: 1
-    dlq-error-class:
-      type: string
-      description: Exception class or error code. Never the message text if it can contain personal data.
-    dlq-failed-at:
-      type: string
-      format: date-time
-
 MonetaryAmount:
   type: object
   description: Money value. Amount is a decimal string to avoid binary floating point rounding.
