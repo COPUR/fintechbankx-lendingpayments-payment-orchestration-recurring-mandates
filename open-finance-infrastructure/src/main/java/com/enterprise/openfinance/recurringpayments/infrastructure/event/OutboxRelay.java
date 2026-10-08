@@ -135,7 +135,7 @@ public class OutboxRelay {
                         break;
                     }
                     row.markFailed(describe(e), now);
-                    if (kind == FailureKind.RETRIABLE && !now.isAfter(row.getFirstFailedAt().plus(retryableParkAfter))) {
+                    if (kind == FailureKind.RETRIABLE && !retriableCeilingReached(row, now)) {
                         log.warn("Outbox relay could not publish event {} to {} (attempt {}, failing since {}); will retry",
                                 row.getEventId(), row.getTopic(), row.getAttempts(), row.getFirstFailedAt(), e);
                         break;
@@ -155,6 +155,16 @@ public class OutboxRelay {
     public int purgePublished() {
         Integer deleted = transactions.execute(status -> outbox.deletePublishedBefore(clock.instant().minus(retention)));
         return deleted == null ? 0 : deleted;
+    }
+
+    /**
+     * The 24 h ceiling for retriable failures (mandates.outbox.relay.retryable-park-after).
+     * Kept pending a governance ruling on whether ADR-021 keeps it; this is the
+     * only place it is applied. Without a ceiling, return false here and drop
+     * the property.
+     */
+    private boolean retriableCeilingReached(OutboxEventJpaEntity row, Instant now) {
+        return now.isAfter(row.getFirstFailedAt().plus(retryableParkAfter));
     }
 
     /** True while the relay is backing off after an authorisation or unclassified failure (the alert). */
