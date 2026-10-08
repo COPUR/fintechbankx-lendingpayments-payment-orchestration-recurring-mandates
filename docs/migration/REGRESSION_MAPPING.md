@@ -26,6 +26,14 @@ An unsupported method or media type was 500 as well; it is now 405 / 415. A
 path the firewall rejects is 400, not 401/403. The DPoP `htu` is the public URL
 built from the gateway's `X-Forwarded-Proto/Host/Port`.
 
+## Parity run findings (LP-08, run 2026-10-08 on e608975)
+
+| Scenario | Finding | Status |
+|---|---|---|
+| LP-08-U01 | a collection's `x-idempotency-key` reused after DELETE: monolith 403 "Consent Revoked", service 201 with the stored payment (f333741 ran the replay first) | fixed in 3fb136b: the mandate's own revoked or expired state is checked before the replay, so the answer is the monolith's 403 "Consent Revoked" / "Consent expired"; the replay stays ahead of the remote consent-auth and accounts checks |
+| LP-08-D10 | unknown and another TPP's mandate or payment path ids | rule INT-PAY-UNIFORM-404-UNKNOWN: one 404, "Consent not found" / "Payment not found" (ADR-025 item 5); bodies byte-identical (c096d0c) |
+| LP-08-U02 | collection on an unknown or another TPP's mandate (`ConsentId` in the body) | rule INT-PAY-UNIFORM-404-UNKNOWN proposed; the service keeps one 403 "Consent not found or not authorised" while ADR-025 item 5 covers path ids only |
+
 ## Intentional behaviour changes
 
 | Area | Monolith | New service |
