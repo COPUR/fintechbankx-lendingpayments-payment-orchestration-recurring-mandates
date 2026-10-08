@@ -5,7 +5,7 @@ output "workload_role_arn" {
 
 output "jdbc_url" {
   description = "Helm value config.DB_URL. verify-full against the RDS CA bundle the chart mounts from ConfigMap rds-ca-bundle (platform trust-manager)."
-  value       = "jdbc:postgresql://${aws_rds_cluster.database.endpoint}:5432/${local.database}?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem"
+  value       = "jdbc:postgresql://${aws_rds_cluster.database.endpoint}:5432/${local.database}?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem"
 }
 
 output "reader_endpoint" {

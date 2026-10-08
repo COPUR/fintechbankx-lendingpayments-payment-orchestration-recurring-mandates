@@ -45,7 +45,7 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | Architecture | [Deployment and Well-Architected notes](docs/architecture/DEPLOYMENT_AND_WELL_ARCHITECTED.md) |
 
 Deployed, the pods verify Aurora's certificate: `DB_URL` must carry
-`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem` (Terraform output
+`sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem` (Terraform output
 `jdbc_url`), and the chart mounts the platform ConfigMap `rds-ca-bundle` there. Local
 runs and tests keep their own URLs.
 

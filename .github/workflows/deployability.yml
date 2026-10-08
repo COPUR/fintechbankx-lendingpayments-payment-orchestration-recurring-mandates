@@ -46,7 +46,7 @@ jobs:
             --set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
             --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client \
             --set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration \
-            --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem \
+            --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem \
             --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
             --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
             --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
@@ -57,7 +57,16 @@ jobs:
           helm template ci "$chart" -f "$chart/values-dev.yaml" $args > /dev/null
           # The pods verify Aurora's certificate against the platform RDS CA bundle.
           grep -q "name: rds-ca-bundle" <<<"$(helm template ci "$chart" $args)"
-          grep -q "mountPath: /etc/ssl/rds" <<<"$(helm template ci "$chart" $args)"
+          # Platform chart convention (cicd-templates 4f0f266): bundle at /etc/fintechbankx/rds-ca, exported as DB_SSL_ROOT_CERT
+          # to the pods and the migration Job.
+          grep -q "mountPath: /etc/fintechbankx/rds-ca" <<<"$(helm template ci "$chart" $args)"
+          test "$(grep -A1 'name: DB_SSL_ROOT_CERT' <<<"$(helm template ci "$chart" $args)" | grep -c 'value: "/etc/fintechbankx/rds-ca/global-bundle.pem"')" -eq 2
+          if helm template ci "$chart" $args --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db > /dev/null 2>&1; then
+            echo "chart rendered a DB_URL without sslmode" >&2; exit 1
+          fi
+          if helm template ci "$chart" $args --set-string "config.DB_URL=jdbc:postgresql://db.ci:5432/db?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem" > /dev/null 2>&1; then
+            echo "chart rendered a DB_URL whose sslrootcert is not the mounted bundle" >&2; exit 1
+          fi
           if helm template ci "$chart" $args --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db?sslmode=require > /dev/null 2>&1; then
             echo "chart rendered a DB_URL without sslmode=verify-full and the RDS CA bundle" >&2; exit 1
           fi

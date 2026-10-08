@@ -67,6 +67,9 @@ spec:
             # schema owner; the pods hold the runtime role and never migrate.
             - name: SPRING_FLYWAY_ENABLED
               value: "false"
+            # Platform convention: the RDS CA bundle path, for clients that take it separately from DB_URL.
+            - name: DB_SSL_ROOT_CERT
+              value: "{{ .Values.rdsCaBundle.mountPath }}/{{ .Values.rdsCaBundle.key }}"
           envFrom:
             - configMapRef:
                 name: {{ include "mandates.name" . }}

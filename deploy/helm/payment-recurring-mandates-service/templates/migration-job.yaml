@@ -90,6 +90,8 @@ spec:
             # The runtime role V5 grants (Flyway placeholder runtime_role).
             - name: DB_USERNAME
               value: {{ .Values.config.DB_USERNAME | quote }}
+            - name: DB_SSL_ROOT_CERT
+              value: "{{ .Values.rdsCaBundle.mountPath }}/{{ .Values.rdsCaBundle.key }}"
           envFrom:
             - secretRef:
                 name: {{ include "mandates.migrationName" . }}

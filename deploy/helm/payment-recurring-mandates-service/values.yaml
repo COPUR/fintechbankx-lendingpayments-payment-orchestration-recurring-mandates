@@ -57,7 +57,7 @@ networkPolicy:
 config:
   # required (deploy/terraform output jdbc_url). Must verify the server
   # certificate against the mounted RDS CA bundle (rdsCaBundle below), e.g.
-  # jdbc:postgresql://<aurora-writer>:5432/db_pay_recurring_mandates_<env>?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem
+  # jdbc:postgresql://<aurora-writer>:5432/db_pay_recurring_mandates_<env>?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem
   DB_URL: ""
   # Runtime role (DML only, granted by V5); its password comes from the
   # db-app secret. The schema owner is used only by the migration Job.
@@ -115,7 +115,8 @@ migration:
 rdsCaBundle:
   configMapName: rds-ca-bundle
   key: global-bundle.pem
-  mountPath: /etc/ssl/rds
+  # Platform chart convention (cicd-templates 4f0f266); also exported as DB_SSL_ROOT_CERT.
+  mountPath: /etc/fintechbankx/rds-ca
 
 # Credentials, synced from AWS Secrets Manager by External Secrets Operator.
 externalSecret:
