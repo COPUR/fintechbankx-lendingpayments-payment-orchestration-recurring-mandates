@@ -3,14 +3,17 @@ package com.enterprise.openfinance.recurringpayments.infrastructure.cache;
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpIdempotencyRecord;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpIdempotencyPort;
 import com.enterprise.openfinance.recurringpayments.infrastructure.config.RecurringPaymentsCacheProperties;
-import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
-@Component
+/**
+ * Single-JVM adapter kept for unit tests and as a reference; not a Spring bean.
+ * The service uses the PostgreSQL adapters so state survives restarts and is
+ * shared across replicas.
+ */
 public class InMemoryVrpIdempotencyAdapter implements VrpIdempotencyPort {
 
     private final Map<String, VrpIdempotencyRecord> records = new ConcurrentHashMap<>();

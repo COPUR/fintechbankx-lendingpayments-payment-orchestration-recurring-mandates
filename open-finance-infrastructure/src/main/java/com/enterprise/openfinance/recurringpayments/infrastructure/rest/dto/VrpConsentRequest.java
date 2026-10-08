@@ -11,7 +11,22 @@ public record VrpConsentRequest(
     public record Data(
             @JsonProperty("PsuId") String psuId,
             @JsonProperty("Limit") Limit limit,
-            @JsonProperty("ExpiryDateTime") Instant expiryDateTime
+            @JsonProperty("ExpiryDateTime") Instant expiryDateTime,
+            @JsonProperty("DebtorAccount") DebtorAccount debtorAccount
+    ) {
+
+        public Data(String psuId, Limit limit, Instant expiryDateTime) {
+            this(psuId, limit, expiryDateTime, null);
+        }
+
+        public String debtorAccountId() {
+            return debtorAccount == null ? null : debtorAccount.identification();
+        }
+    }
+
+    /** Optional PSU account the collections debit; verified with the accounts service. */
+    public record DebtorAccount(
+            @JsonProperty("Identification") String identification
     ) {
     }
 

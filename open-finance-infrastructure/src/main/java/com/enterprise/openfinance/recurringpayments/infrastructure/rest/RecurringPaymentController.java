@@ -10,6 +10,7 @@ import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpC
 import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpConsentResponse;
 import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpPaymentRequest;
 import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpPaymentResponse;
+import com.enterprise.openfinance.recurringpayments.infrastructure.security.TppIdentity;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
@@ -31,9 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 @RestController
@@ -42,8 +41,6 @@ import java.util.concurrent.TimeUnit;
 public class RecurringPaymentController {
 
     private final RecurringPaymentUseCase useCase;
-    private final Map<String, String> consentEtagCache = new ConcurrentHashMap<>();
-    private final Map<String, String> paymentEtagCache = new ConcurrentHashMap<>();
 
     public RecurringPaymentController(RecurringPaymentUseCase useCase) {
         this.useCase = useCase;
@@ -66,7 +63,8 @@ public class RecurringPaymentController {
                 new BigDecimal(request.data().limit().amount()),
                 request.data().limit().currency(),
                 request.data().expiryDateTime(),
-                interactionId
+                interactionId,
+                request.data().debtorAccountId()
         );
 
         var consent = useCase.createConsent(command);
@@ -88,17 +86,8 @@ public class RecurringPaymentController {
         validateSecurityHeaders(authorization, dpop, interactionId);
         String tppId = resolveTppId(financialId);
 
-        String requestKey = consentRequestKey(consentId, tppId);
-        String cachedEtag = consentEtagCache.get(requestKey);
-        if (ifNoneMatch != null && ifNoneMatch.equals(cachedEtag)) {
-            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
-                    .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
-                    .header("X-FAPI-Interaction-ID", interactionId)
-                    .eTag(cachedEtag)
-                    .build();
-        }
-
-        boolean cacheHit = cachedEtag != null;
+        // The ETag is computed from the current state on every request, so a
+        // revoked mandate never answers 304 with a stale tag, on any replica.
         Optional<VrpConsentResponse> response = useCase.getConsent(new GetVrpConsentQuery(consentId, tppId, interactionId))
                 .map(VrpConsentResponse::from);
 
@@ -110,12 +99,17 @@ public class RecurringPaymentController {
         }
 
         String etag = generateEtag(response.orElseThrow().data().toString());
-        consentEtagCache.put(requestKey, etag);
+        if (ifNoneMatch != null && ifNoneMatch.equals(etag)) {
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
+                    .header("X-FAPI-Interaction-ID", interactionId)
+                    .eTag(etag)
+                    .build();
+        }
 
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
                 .header("X-FAPI-Interaction-ID", interactionId)
-                .header("X-OF-Cache", cacheHit ? "HIT" : "MISS")
                 .eTag(etag)
                 .body(response.orElseThrow());
     }
@@ -188,17 +182,8 @@ public class RecurringPaymentController {
         validateSecurityHeaders(authorization, dpop, interactionId);
         String tppId = resolveTppId(financialId);
 
-        String requestKey = paymentRequestKey(paymentId, tppId);
-        String cachedEtag = paymentEtagCache.get(requestKey);
-        if (ifNoneMatch != null && ifNoneMatch.equals(cachedEtag)) {
-            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
-                    .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
-                    .header("X-FAPI-Interaction-ID", interactionId)
-                    .eTag(cachedEtag)
-                    .build();
-        }
-
-        boolean cacheHit = cachedEtag != null;
+        // The ETag is computed from the current state on every request, so a
+        // revoked mandate never answers 304 with a stale tag, on any replica.
         Optional<VrpPaymentResponse> response = useCase.getPayment(new GetVrpPaymentQuery(paymentId, tppId, interactionId))
                 .map(VrpPaymentResponse::from);
 
@@ -210,21 +195,23 @@ public class RecurringPaymentController {
         }
 
         String etag = generateEtag(response.orElseThrow().data().toString());
-        paymentEtagCache.put(requestKey, etag);
+        if (ifNoneMatch != null && ifNoneMatch.equals(etag)) {
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
+                    .header("X-FAPI-Interaction-ID", interactionId)
+                    .eTag(etag)
+                    .build();
+        }
 
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())
                 .header("X-FAPI-Interaction-ID", interactionId)
-                .header("X-OF-Cache", cacheHit ? "HIT" : "MISS")
                 .eTag(etag)
                 .body(response.orElseThrow());
     }
 
     private static String resolveTppId(String financialId) {
-        if (financialId == null || financialId.isBlank()) {
-            return "UNKNOWN_TPP";
-        }
-        return financialId.trim();
+        return TppIdentity.resolve(financialId);
     }
 
     private static void validateSecurityHeaders(String authorization,
@@ -250,13 +237,5 @@ public class RecurringPaymentController {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("Unable to generate ETag", exception);
         }
-    }
-
-    private static String consentRequestKey(String consentId, String tppId) {
-        return "consent:" + consentId + ':' + tppId;
-    }
-
-    private static String paymentRequestKey(String paymentId, String tppId) {
-        return "payment:" + paymentId + ':' + tppId;
     }
 }

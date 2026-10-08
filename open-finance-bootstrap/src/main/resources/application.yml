@@ -1,0 +1,147 @@
+# svc-pay-recurring-mandates runtime configuration.
+# Every environment-specific value comes from the environment (Helm values,
+# Kubernetes Secret synced from AWS Secrets Manager); nothing secret is here.
+spring:
+  application:
+    name: payment-recurring-mandates-service
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/db_pay_recurring_mandates_local}
+    username: ${DB_USERNAME:pay_recurring_mandates_app}
+    # The credential is bound from SPRING_DATASOURCE_PASSWORD (Kubernetes Secret
+    # synced from AWS Secrets Manager); it is never written in this file.
+    hikari:
+      schema: sc_pay_recurring_mandates
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: 3000
+      max-lifetime: 1200000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: sc_pay_recurring_mandates
+        jdbc:
+          time_zone: UTC
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+  flyway:
+    schemas: sc_pay_recurring_mandates
+    default-schema: sc_pay_recurring_mandates
+    create-schemas: true
+    locations: classpath:db/migration
+  kafka:
+    # Runtime-neutral; MSK IAM / Strimzi mTLS come from the kafka-msk / kafka-strimzi profiles.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    client-id: svc-pay-recurring-mandates
+    security:
+      protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+    admin:
+      # Topics exist only through the platform topic catalog; never created from here.
+      auto-create: false
+    producer:
+      acks: all
+      compression-type: lz4
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 30000
+        linger.ms: 5
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8180/realms/fintechbankx}
+          jwk-set-uri: ${OIDC_JWK_SET_URI:http://localhost:8180/realms/fintechbankx/protocol/openid-connect/certs}
+      # Outbound service-to-service calls use this service's own
+      # client-credentials token, never the TPP's token.
+      client:
+        registration:
+          accounts-service:
+            provider: fintechbankx
+            client-id: ${SERVICE_CLIENT_ID:svc-pay-recurring-mandates}
+            client-secret: ${SERVICE_CLIENT_SECRET:}
+            authorization-grant-type: client_credentials
+            client-authentication-method: client_secret_basic
+        provider:
+          fintechbankx:
+            token-uri: ${OIDC_TOKEN_URI:http://localhost:8180/realms/fintechbankx/protocol/openid-connect/token}
+
+server:
+  port: 8080
+  shutdown: graceful
+  forward-headers-strategy: framework
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  metrics:
+    tags:
+      service: svc-pay-recurring-mandates
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  observations:
+    key-values:
+      service: svc-pay-recurring-mandates
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.observability.svc.cluster.local:4318/v1/traces}
+
+openfinance:
+  recurringpayments:
+    cache:
+      ttl: PT30S
+      max-entries: 10000
+    policy:
+      idempotency-ttl: PT24H
+
+mandates:
+  security:
+    # Tokens must carry this service id in aud (or azp).
+    audience: ${OIDC_AUDIENCE:svc-pay-recurring-mandates}
+  accounts:
+    # http: accounts API (default, fails closed). in-memory: demo accounts for local runs only.
+    adapter: ${ACCOUNTS_ADAPTER:http}
+    base-url: ${ACCOUNTS_SERVICE_BASE_URL:http://accounts-service:8080}
+    client-registration-id: accounts-service
+    connect-timeout: PT1S
+    read-timeout: PT2S
+  outbox:
+    retention: P7D
+    relay:
+      # Off until the evt.pay.mandate.*.v1 topics exist on the platform cluster.
+      enabled: ${OUTBOX_RELAY_ENABLED:false}
+      interval: PT1S
+      batch-size: 100
+      max-attempts: ${OUTBOX_RELAY_MAX_ATTEMPTS:10}
+      send-timeout: PT10S
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"

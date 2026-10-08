@@ -1,0 +1,396 @@
+package com.enterprise.openfinance.recurringpayments;
+
+import com.enterprise.openfinance.recurringpayments.domain.exception.MandateVersionConflictException;
+import com.enterprise.openfinance.recurringpayments.domain.model.VrpConsent;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpConsentPort;
+import com.enterprise.openfinance.recurringpayments.infrastructure.event.OutboxRelay;
+import com.enterprise.openfinance.recurringpayments.infrastructure.event.SpringDataOutboxRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.security.oauth2.jwt.BadJwtException;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Boots the whole service against PostgreSQL: Flyway builds
+ * sc_pay_recurring_mandates, Hibernate validates the entities against it, and
+ * mandates go through their lifecycle over HTTP with their events landing in
+ * the outbox and then on (a mocked) Kafka. Debtor accounts come from the
+ * in-memory demo adapter (ACC-AED-ACTIVE, ACC-AED-BLOCKED).
+ */
+@SpringBootTest(properties = {
+        "mandates.accounts.adapter=in-memory",
+        "mandates.outbox.relay.enabled=false",
+        "management.tracing.enabled=false"
+})
+@AutoConfigureMockMvc
+class RecurringMandatesServiceIT {
+
+    private static final String SCHEMA = "sc_pay_recurring_mandates";
+    private static final String TPP = "TPP-001";
+
+    @BeforeAll
+    static void requireDatabase() {
+        PostgresTestDatabase.assumeAvailable();
+    }
+
+    @DynamicPropertySource
+    static void database(DynamicPropertyRegistry registry) {
+        PostgresTestDatabase.register(registry);
+    }
+
+    @Autowired MockMvc mvc;
+    @Autowired ObjectMapper json;
+    @Autowired JdbcTemplate jdbc;
+    @Autowired VrpConsentPort consents;
+    @Autowired SpringDataOutboxRepository outbox;
+    @Autowired PlatformTransactionManager transactionManager;
+    @MockBean KafkaTemplate<String, String> kafka;
+    // The real decoder (issuer + audience validation) is covered by SecurityConfigurationTest;
+    // here a token "tok-<client>" stands for a valid Keycloak token of that TPP client.
+    @MockBean JwtDecoder jwtDecoder;
+
+    @BeforeEach
+    void tokens() {
+        when(jwtDecoder.decode(anyString())).thenAnswer(invocation -> {
+            String token = invocation.getArgument(0);
+            if (!token.startsWith("tok-")) {
+                throw new BadJwtException("invalid token");
+            }
+            String client = token.substring(4);
+            return Jwt.withTokenValue(token).header("alg", "RS256")
+                    .subject("service-account-" + client).claim("azp", client)
+                    .audience(List.of("svc-pay-recurring-mandates"))
+                    .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300)).build();
+        });
+    }
+
+    @BeforeEach
+    void cleanTables() {
+        jdbc.update("delete from " + SCHEMA + ".outbox_event");
+        jdbc.update("delete from " + SCHEMA + ".vrp_idempotency_record");
+        jdbc.update("delete from " + SCHEMA + ".vrp_payment");
+        jdbc.update("delete from " + SCHEMA + ".vrp_mandate");
+    }
+
+    @Test
+    void flywayCreatesOnlyTheTablesThisServiceOwns() {
+        List<String> tables = jdbc.queryForList("""
+                select table_name from information_schema.tables
+                where table_schema = 'sc_pay_recurring_mandates' and table_name <> 'flyway_schema_history'
+                order by table_name
+                """, String.class);
+
+        assertThat(tables).containsExactly("outbox_event", "vrp_idempotency_record", "vrp_mandate", "vrp_payment");
+    }
+
+    @Test
+    void mandateLifecycleOverHttpPersistsStateAndWritesEveryEventToTheOutbox() throws Exception {
+        String consentId = createConsent("5000.00", "ACC-AED-ACTIVE");
+
+        String paymentId = submit(consentId, "IDEMP-LC-1", "1250.00");
+        mvc.perform(asTpp(get("/open-finance/v1/vrp/payments/{id}", paymentId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.Data.InstructedAmount.Amount").value("1250.00"));
+        mvc.perform(asTpp(delete("/open-finance/v1/vrp/payment-consents/{id}", consentId)).param("reason", "Customer request"))
+                .andExpect(status().isNoContent());
+        mvc.perform(asTpp(get("/open-finance/v1/vrp/payment-consents/{id}", consentId)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.Data.Status").value("Revoked"));
+
+        assertThat(jdbc.queryForMap("select status, version, debtor_account_id from " + SCHEMA + ".vrp_mandate where consent_id = ?", consentId))
+                .containsEntry("status", "REVOKED")
+                .containsEntry("version", 2L)
+                .containsEntry("debtor_account_id", "ACC-AED-ACTIVE");
+        assertThat(jdbc.queryForObject("select amount from " + SCHEMA + ".vrp_payment where payment_id = ?", BigDecimal.class, paymentId))
+                .isEqualByComparingTo("1250.00");
+
+        List<String> eventTypes = jdbc.queryForList(
+                "select event_type || ':' || aggregate_version from " + SCHEMA + ".outbox_event where aggregate_id = ? order by created_seq",
+                String.class, consentId);
+        assertThat(eventTypes).containsExactly(
+                "Payments.Mandate.Created.v1:0", "Payments.Mandate.PaymentAccepted.v1:1", "Payments.Mandate.Revoked.v1:2");
+
+        JsonNode accepted = json.readTree(jdbc.queryForObject(
+                "select payload::text from " + SCHEMA + ".outbox_event where aggregate_id = ? and event_type = 'Payments.Mandate.PaymentAccepted.v1'",
+                String.class, consentId));
+        assertThat(accepted.get("producer").asText()).isEqualTo("svc-pay-recurring-mandates");
+        assertThat(accepted.get("correlationId").asText()).isEqualTo("it-interaction-1");
+        assertThat(accepted.get("aggregateId").asText()).isEqualTo(consentId);
+        assertThat(accepted.at("/data/paymentId").asText()).isEqualTo(paymentId);
+        assertThat(accepted.at("/data/amount/amount").asText()).isEqualTo("1250.00");
+        assertThat(accepted.at("/data/periodTotal/currency").asText()).isEqualTo("AED");
+    }
+
+    @Test
+    void blockedDebtorAccountIsRefusedAndNothingIsStored() throws Exception {
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson("5000.00", "ACC-AED-BLOCKED")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Debtor account is not active"));
+
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".vrp_mandate", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".outbox_event", Integer.class)).isZero();
+    }
+
+    @Test
+    void retryWithTheSameIdempotencyKeyReturnsTheFirstPaymentAndAChangedPayloadIsAConflict() throws Exception {
+        String consentId = createConsent("5000.00", null);
+        String first = submit(consentId, "IDEMP-RT-1", "100.00");
+
+        MvcResult replay = mvc.perform(paymentRequest(consentId, "IDEMP-RT-1", "100.00", TPP))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("X-OF-Idempotency", "HIT"))
+                .andReturn();
+        assertThat(paymentId(replay)).isEqualTo(first);
+
+        mvc.perform(paymentRequest(consentId, "IDEMP-RT-1", "101.00", TPP))
+                .andExpect(status().isConflict());
+
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".vrp_payment", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".outbox_event where event_type = 'Payments.Mandate.PaymentAccepted.v1'", Integer.class))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void concurrentRequestsWithTheSameIdempotencyKeyCreateOnePayment() throws Exception {
+        String consentId = createConsent("5000.00", null);
+
+        List<MvcResult> results = race(4, i -> paymentRequest(consentId, "IDEMP-RACE", "100.00", TPP));
+
+        assertThat(results).allSatisfy(result -> assertThat(result.getResponse().getStatus()).isEqualTo(201));
+        assertThat(results.stream().map(RecurringMandatesServiceIT::paymentIdUnchecked).distinct()).hasSize(1);
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".vrp_payment", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentCollectionsCannotTogetherExceedTheMonthlyLimit() throws Exception {
+        String consentId = createConsent("5000.00", null);
+
+        List<MvcResult> results = race(4, i -> paymentRequest(consentId, "IDEMP-LIMIT-" + i, "2000.00", TPP));
+
+        assertThat(results).extracting(r -> r.getResponse().getStatus()).containsOnly(201, 400)
+                .filteredOn(code -> code == 201).hasSize(2);
+        assertThat(jdbc.queryForObject("select sum(amount) from " + SCHEMA + ".vrp_payment where consent_id = ?", BigDecimal.class, consentId))
+                .isEqualByComparingTo("4000.00");
+        assertThat(jdbc.queryForObject("select version from " + SCHEMA + ".vrp_mandate where consent_id = ?", Long.class, consentId))
+                .isEqualTo(2L);
+    }
+
+    @Test
+    void anotherTppCannotReadUseOrRevokeTheMandate() throws Exception {
+        String consentId = createConsent("5000.00", null);
+        String paymentId = submit(consentId, "IDEMP-OWN-1", "10.00");
+
+        mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payment-consents/{id}", consentId)))
+                .andExpect(status().isForbidden());
+        mvc.perform(as("TPP-002", get("/open-finance/v1/vrp/payments/{id}", paymentId)))
+                .andExpect(status().isForbidden());
+        mvc.perform(paymentRequest(consentId, "IDEMP-OWN-2", "10.00", "TPP-002"))
+                .andExpect(status().isForbidden());
+        mvc.perform(as("TPP-002", delete("/open-finance/v1/vrp/payment-consents/{id}", consentId)).param("reason", "x"))
+                .andExpect(status().isForbidden());
+        // A header naming another TPP than the token's client is refused.
+        mvc.perform(asTpp(get("/open-finance/v1/vrp/payment-consents/{id}", consentId)).header("x-fapi-financial-id", "TPP-002"))
+                .andExpect(status().isForbidden());
+
+        assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".vrp_mandate where consent_id = ?", String.class, consentId))
+                .isEqualTo("AUTHORISED");
+    }
+
+    @Test
+    void staleMandateVersionCannotOverwriteANewerOne() throws Exception {
+        String consentId = createConsent("5000.00", null);
+        VrpConsent stale = consents.findById(consentId).orElseThrow();
+        submit(consentId, "IDEMP-STALE-1", "10.00");
+
+        VrpConsent staleRevoked = stale.revoke(Clock.systemUTC().instant(), "stale").mandate();
+        assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(tx -> consents.save(staleRevoked)))
+                .isInstanceOf(MandateVersionConflictException.class);
+        assertThat(jdbc.queryForObject("select status from " + SCHEMA + ".vrp_mandate where consent_id = ?", String.class, consentId))
+                .isEqualTo("AUTHORISED");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void relayPublishesInOrderKeyedByMandateAndParksAPoisonEventWithoutBlockingOthers() throws Exception {
+        String first = createConsent("5000.00", null);
+        submit(first, "IDEMP-RELAY-1", "10.00");
+        String second = createConsent("700.00", null);
+
+        when(kafka.send(any(ProducerRecord.class))).thenAnswer(invocation -> {
+            ProducerRecord<String, String> record = invocation.getArgument(0);
+            if (record.key().equals(first) && record.topic().endsWith(".created.v1")) {
+                return CompletableFuture.failedFuture(new IllegalStateException("broker rejected"));
+            }
+            return CompletableFuture.completedFuture((SendResult<String, String>) null);
+        });
+        OutboxRelay relay = new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager),
+                Clock.systemUTC(), 100, 2, Duration.ofSeconds(5), Duration.ofDays(7));
+
+        assertThat(relay.relayOnce()).isEqualTo(1); // second mandate's event; first mandate waits behind its failed event
+        assertThat(relay.relayOnce()).isEqualTo(1); // first mandate's created event parked, its payment event goes out
+
+        assertThat(outbox.countPending()).isZero();
+        assertThat(outbox.countParked()).isEqualTo(1);
+        ArgumentCaptor<ProducerRecord<String, String>> records = ArgumentCaptor.forClass(ProducerRecord.class);
+        Mockito.verify(kafka, Mockito.times(4)).send(records.capture());
+        List<String> delivered = new ArrayList<>();
+        for (int i = 0; i < records.getAllValues().size(); i++) {
+            ProducerRecord<String, String> r = records.getAllValues().get(i);
+            delivered.add(r.key().equals(first) ? "first:" + r.topic() : "second:" + r.topic());
+        }
+        assertThat(delivered).containsExactly(
+                "first:evt.pay.mandate.created.v1",
+                "second:evt.pay.mandate.created.v1",
+                "first:evt.pay.mandate.created.v1",
+                "first:evt.pay.mandate.payment-accepted.v1");
+    }
+
+    @Test
+    void apiRejectsCallsWithoutAValidToken() throws Exception {
+        mvc.perform(get("/open-finance/v1/vrp/payment-consents/{id}", "CONS-ANY")
+                        .header("x-fapi-interaction-id", "it-1").header("DPoP", "proof"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/open-finance/v1/vrp/payment-consents/{id}", "CONS-ANY")
+                        .header("Authorization", "Bearer forged").header("x-fapi-interaction-id", "it-1").header("DPoP", "proof"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void healthAndUnknownPathsAreHandledBySecurity() throws Exception {
+        mvc.perform(asTpp(get("/internal/anything"))).andExpect(status().isForbidden());
+    }
+
+    private interface RequestFactory {
+        MockHttpServletRequestBuilder build(int index) throws Exception;
+    }
+
+    private List<MvcResult> race(int parallel, RequestFactory requests) throws Exception {
+        ExecutorService executor = Executors.newFixedThreadPool(parallel);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<MvcResult>> futures = new ArrayList<>();
+            for (int i = 0; i < parallel; i++) {
+                MockHttpServletRequestBuilder request = requests.build(i);
+                Callable<MvcResult> call = () -> {
+                    start.await(5, TimeUnit.SECONDS);
+                    return mvc.perform(request).andReturn();
+                };
+                futures.add(executor.submit(call));
+            }
+            start.countDown();
+            List<MvcResult> results = new ArrayList<>();
+            for (Future<MvcResult> future : futures) {
+                results.add(future.get(30, TimeUnit.SECONDS));
+            }
+            return results;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private String createConsent(String limit, String debtorAccount) throws Exception {
+        MvcResult result = mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(consentJson(limit, debtorAccount)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.Data.Status").value("Authorised"))
+                .andReturn();
+        return json.readTree(result.getResponse().getContentAsString()).at("/Data/ConsentId").asText();
+    }
+
+    private String submit(String consentId, String idempotencyKey, String amount) throws Exception {
+        return paymentId(mvc.perform(paymentRequest(consentId, idempotencyKey, amount, TPP))
+                .andExpect(status().isCreated())
+                .andReturn());
+    }
+
+    private MockHttpServletRequestBuilder paymentRequest(String consentId, String idempotencyKey, String amount, String tpp) {
+        return as(tpp, post("/open-finance/v1/vrp/payments"))
+                .header("x-idempotency-key", idempotencyKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                        {"Data": {"ConsentId": "%s", "InstructedAmount": {"Amount": "%s", "Currency": "AED"}}}
+                        """.formatted(consentId, amount));
+    }
+
+    private String paymentId(MvcResult result) throws Exception {
+        return json.readTree(result.getResponse().getContentAsString()).at("/Data/PaymentId").asText();
+    }
+
+    private static String paymentIdUnchecked(MvcResult result) {
+        try {
+            return new ObjectMapper().readTree(result.getResponse().getContentAsString()).at("/Data/PaymentId").asText();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String consentJson(String limit, String debtorAccount) {
+        String account = debtorAccount == null ? "" : ", \"DebtorAccount\": {\"Identification\": \"" + debtorAccount + "\"}";
+        return """
+                {"Data": {"PsuId": "PSU-001", "Limit": {"Amount": "%s", "Currency": "AED"},
+                 "ExpiryDateTime": "2099-01-01T00:00:00Z"%s}}
+                """.formatted(limit, account);
+    }
+
+    private static MockHttpServletRequestBuilder asTpp(MockHttpServletRequestBuilder request) {
+        return as(TPP, request);
+    }
+
+    private static MockHttpServletRequestBuilder as(String tpp, MockHttpServletRequestBuilder request) {
+        return request
+                .header("Authorization", "DPoP tok-" + tpp)
+                .header("DPoP", "it-proof")
+                .header("x-fapi-interaction-id", "it-interaction-1");
+    }
+}

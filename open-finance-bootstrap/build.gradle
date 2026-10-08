@@ -1,0 +1,53 @@
+// =================================================================
+// RECURRING MANDATES BOOTSTRAP MODULE
+// =================================================================
+// Runnable Spring Boot service (svc-pay-recurring-mandates). Wires the domain,
+// application and infrastructure modules; holds runtime configuration only.
+// =================================================================
+
+apply plugin: 'org.springframework.boot'
+
+description = 'Recurring mandates bootstrap - deployable svc-pay-recurring-mandates service'
+
+dependencies {
+    implementation project(':open-finance-infrastructure')
+    implementation project(':open-finance-application')
+    implementation project(':open-finance-domain')
+
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'org.flywaydb:flyway-core'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
+    // Traces over OTLP/HTTP to the platform collector
+    runtimeOnly 'io.micrometer:micrometer-tracing-bridge-otel'
+    runtimeOnly 'io.opentelemetry:opentelemetry-exporter-otlp'
+    runtimeOnly 'org.postgresql:postgresql'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    // MSK IAM client auth, used by the aws profile (platform contract)
+    runtimeOnly 'software.amazon.msk:aws-msk-iam-auth:2.2.0'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+}
+
+springBoot {
+    mainClass = 'com.enterprise.openfinance.recurringpayments.RecurringMandatesApplication'
+    buildInfo()
+}
+
+bootJar {
+    archiveFileName = 'payment-recurring-mandates-service.jar'
+}
+
+jar {
+    enabled = false
+}
+
