@@ -22,6 +22,9 @@ The paths are unchanged, so cutover is a routing change at the ingress gateway
 
 Missing required headers or a malformed body were 500 `INTERNAL_ERROR` in the
 monolith (caught by its `Exception` handler); they are now 400 `INVALID_REQUEST`.
+An unsupported method or media type was 500 as well; it is now 405 / 415. A
+path the firewall rejects is 400, not 401/403. The DPoP `htu` is the public URL
+built from the gateway's `X-Forwarded-Proto/Host/Port`.
 
 ## Intentional behaviour changes
 
