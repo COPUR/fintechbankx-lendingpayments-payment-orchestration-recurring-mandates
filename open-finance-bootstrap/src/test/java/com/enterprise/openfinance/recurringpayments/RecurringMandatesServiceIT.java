@@ -298,20 +298,39 @@ class RecurringMandatesServiceIT {
     }
 
     @Test
-    void aRetryAfterTheMandateWasRevokedGetsTheStoredResultNotA403() throws Exception {
+    void aRetryAfterTheMandateWasRevokedIs403ConsentRevokedLikeTheMonolith() throws Exception {
+        // Parity LP-08-U01 (regression run 2026-10-08 on e608975): reuse the key after DELETE.
         String consentId = createConsent("5000.00", null);
-        String first = submit(consentId, "IDEMP-REV-RT-1", "100.00");
+        submit(consentId, "IDEMP-REV-RT-1", "100.00");
         mvc.perform(asTpp(delete("/open-finance/v1/vrp/payment-consents/{id}", consentId)).param("reason", "Customer request"))
                 .andExpect(status().isNoContent());
 
-        MvcResult replay = mvc.perform(paymentRequest(consentId, "IDEMP-REV-RT-1", "100.00", TPP))
+        mvc.perform(paymentRequest(consentId, "IDEMP-REV-RT-1", "100.00", TPP))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value("Consent Revoked"));
+        mvc.perform(paymentRequest(consentId, "IDEMP-REV-RT-2", "100.00", TPP))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Consent Revoked"));
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_payment", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void aRetryDuringAConsentServiceOutageStillGetsTheStoredResult() throws Exception {
+        // The replay stays ahead of the remote consent check: a retry needs no consent-auth call.
+        String consentId = createConsent("5000.00", null);
+        String first = submit(consentId, "IDEMP-OUTAGE-1", "100.00");
+        when(consentService.findConsent(anyString())).thenThrow(
+                new com.enterprise.openfinance.recurringpayments.infrastructure.external.ConsentServiceUnavailableException(
+                        "down", null));
+
+        MvcResult replay = mvc.perform(paymentRequest(consentId, "IDEMP-OUTAGE-1", "100.00", TPP))
                 .andExpect(status().isCreated())
                 .andExpect(header().string("X-OF-Idempotency", "HIT"))
                 .andReturn();
         assertThat(paymentId(replay)).isEqualTo(first);
-        mvc.perform(paymentRequest(consentId, "IDEMP-REV-RT-2", "100.00", TPP))
-                .andExpect(status().isForbidden());
-        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_payment", Integer.class)).isEqualTo(1);
+        mvc.perform(paymentRequest(consentId, "IDEMP-OUTAGE-2", "100.00", TPP))
+                .andExpect(status().isServiceUnavailable());
     }
 
     @Test

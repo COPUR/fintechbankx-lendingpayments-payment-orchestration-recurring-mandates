@@ -243,30 +243,43 @@ class RecurringPaymentServiceTest {
     }
 
     @Test
-    void aRetryAfterTheMandateWasRevokedReturnsTheStoredResult() {
+    void aRetryAfterTheMandateWasRevokedIsRefusedLikeTheMonolith() {
+        // Parity LP-08-U01: the monolith checks the mandate's own state before the
+        // idempotent replay, so a reused key after DELETE is 403 "Consent Revoked".
         TestPaymentPort payments = new TestPaymentPort();
         RecurringPaymentService service = service(new TestConsentPort(), payments, new TestIdempotencyPort(),
                 new TestCachePort(), new TestLockPort());
         VrpConsent consent = createConsent(service);
         SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
                 "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-1", new BigDecimal("10.00"), "AED", "ix-7");
-        VrpCollectionResult accepted = service.submitCollection(collection);
+        service.submitCollection(collection);
 
         service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-7", "User request"));
-        VrpCollectionResult retried = service.submitCollection(collection);
 
-        assertThat(retried.paymentId()).isEqualTo(accepted.paymentId());
-        assertThat(retried.status()).isEqualTo(accepted.status());
-        assertThat(retried.idempotencyReplay()).isTrue();
-        assertThat(payments.data).hasSize(1);
-        // A different request under the same key is still a conflict, not a new collection.
-        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
-                "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-1", new BigDecimal("11.00"), "AED", "ix-7")))
-                .isInstanceOf(IdempotencyConflictException.class);
-        // A new key on the revoked mandate is refused.
+        assertThatThrownBy(() -> service.submitCollection(collection))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
         assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
                 "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-2", new BigDecimal("10.00"), "AED", "ix-7")))
                 .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
+        assertThat(payments.data).hasSize(1);
+    }
+
+    @Test
+    void aRetryAfterTheMandateExpiredIsRefusedLikeTheMonolith() {
+        TestConsentPort mandates = new TestConsentPort();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+        VrpConsent consent = createConsent(service);
+        SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-EXP-RETRY-1", new BigDecimal("10.00"), "AED", "ix-7");
+        service.submitCollection(collection);
+
+        VrpConsent stored = mandates.findById(consent.consentId()).orElseThrow();
+        mandates.save(new VrpConsent(stored.consentId(), stored.tppId(), stored.psuId(), new BigDecimal("5000.00"),
+                "AED", VrpConsentStatus.AUTHORISED, Instant.parse("2026-02-09T09:00:00Z"), null));
+
+        assertThatThrownBy(() -> service.submitCollection(collection))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent expired");
     }
 
     @Test

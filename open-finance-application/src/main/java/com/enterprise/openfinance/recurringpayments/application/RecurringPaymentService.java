@@ -151,17 +151,19 @@ public class RecurringPaymentService implements RecurringPaymentUseCase {
     public VrpCollectionResult submitCollection(SubmitVrpPaymentCommand command) {
         Instant now = Instant.now(clock);
 
-        // A retry of a collection that was already accepted gets the stored result,
-        // even if the mandate was revoked or the PSU withdrew the consent since: the
-        // money moved once and the TPP must learn its outcome. The idempotency record
-        // is scoped to this TPP and the request hash, so it reveals nothing new.
+        // The mandate's own state first, locally and as the monolith does (parity LP-08-U01):
+        // a revoked or expired mandate is 403 "Consent Revoked" / "Consent expired", also
+        // for a reused idempotency key.
+        VrpConsent consent = loadConsent(command.consentId());
+        consent.ensureCanCollect(command, now);
+
+        // Then the idempotent replay, ahead of every remote call: a retry of an accepted
+        // collection gets the stored result even while the consent service is down or
+        // after the PSU withdrew the consent there.
         Optional<VrpCollectionResult> replay = lookupIdempotentReplay(command, now);
         if (replay.isPresent()) {
             return replay.orElseThrow();
         }
-
-        VrpConsent consent = loadConsent(command.consentId());
-        consent.ensureCanCollect(command, now);
 
         // Remote checks before the transaction and the lock. The PSU may have withdrawn
         // the consent in the consent service; the debtor account of a mandate never
