@@ -12,3 +12,6 @@ build/
 **/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
+
+# Node packages installed by CI steps (npm install --no-save)
+node_modules/

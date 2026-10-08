@@ -124,6 +124,8 @@ jobs:
           NPM_CONFIG_CACHE: /tmp/.npm
         run: npx -y @redocly/cli@1.27.1 lint api/openapi/*.yaml
 
+      # ADR-019 section 5: the producer gates its own AsyncAPI file. CLI versions as in the
+      # AsyncAPI catalog's workflow (Node 22, @asyncapi/cli 2.13.0, yaml 2.9.1).
       - name: AsyncAPI contract validation
         if: ${{ hashFiles('api/asyncapi/*.yaml') != '' }}
         env:
@@ -132,6 +134,17 @@ jobs:
           for spec in api/asyncapi/*.yaml; do
             npx -y @asyncapi/cli@2.13.0 validate "$spec"
           done
+
+      - name: AsyncAPI breaking-change check
+        if: ${{ hashFiles('api/asyncapi/*.yaml') != '' }}
+        env:
+          # Always main: versions count from the first merge to main; before that the spec is
+          # pre-release and stays 1.0.0 (asyncapi-catalog README, "Change rules").
+          BASE_REF: origin/main
+          NPM_CONFIG_CACHE: /tmp/.npm
+        run: |
+          npm install --no-save --no-package-lock yaml@2.9.1
+          ./scripts/ci/asyncapi-provider-breaking.sh
 
       - name: Install oasdiff
         if: ${{ hashFiles('api/openapi/*.yaml') != '' }}
