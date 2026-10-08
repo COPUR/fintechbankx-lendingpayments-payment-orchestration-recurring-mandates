@@ -29,9 +29,11 @@ public class OutboxConfiguration {
     }
 
     /**
-     * Platform metric names: outbox_pending_events (alert on growth: the relay
-     * or the brokers are down), outbox_parked_events (alert on any: events
-     * that need an operator) and outbox_oldest_pending_age_seconds.
+     * Platform metric names: outbox_pending_events, outbox_parked_events (alert
+     * on any: events that need an operator) and
+     * outbox_oldest_pending_age_seconds (the outage alert: retryable failures
+     * stop the relay without parking for up to retryable-park-after, so this
+     * age, not the parked count, shows a broker or egress outage).
      */
     @Bean
     Gauge outboxPendingGauge(MeterRegistry registry, SpringDataOutboxRepository outbox) {
@@ -43,7 +45,7 @@ public class OutboxConfiguration {
     @Bean
     Gauge outboxParkedGauge(MeterRegistry registry, SpringDataOutboxRepository outbox) {
         return Gauge.builder("outbox.parked.events", outbox, SpringDataOutboxRepository::countParked)
-                .description("Mandate events parked after the maximum number of publish attempts")
+                .description("Mandate events parked by the relay (permanent failure, or retryable failures for longer than retryable-park-after)")
                 .register(registry);
     }
 
@@ -76,11 +78,11 @@ public class OutboxConfiguration {
                                 PlatformTransactionManager transactionManager,
                                 Clock clock,
                                 @Value("${mandates.outbox.relay.batch-size:100}") int batchSize,
-                                @Value("${mandates.outbox.relay.max-attempts:10}") int maxAttempts,
                                 @Value("${mandates.outbox.relay.send-timeout:PT35S}") Duration sendTimeout,
-                                @Value("${mandates.outbox.retention:P7D}") Duration retention) {
+                                @Value("${mandates.outbox.retention:P7D}") Duration retention,
+                                @Value("${mandates.outbox.relay.retryable-park-after:PT24H}") Duration retryableParkAfter) {
             return new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager), clock, batchSize,
-                    maxAttempts, sendTimeout, retention);
+                    sendTimeout, retention, retryableParkAfter);
         }
 
         @Bean

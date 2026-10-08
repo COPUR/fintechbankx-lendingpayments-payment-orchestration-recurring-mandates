@@ -32,7 +32,7 @@ Consequences:
 - No `db/backfill`, no `scripts/migration/verify-backfill.sh` and no
   data-split CI job in this repository, on purpose.
 - Flyway migrations: `open-finance-infrastructure/src/main/resources/db/migration/V1__create_mandate_tables.sql`,
-  `V2__create_outbox.sql`. The service never reads monolith tables; nothing
+  `V2__create_outbox.sql`, `V3__create_dpop_proof_jti.sql`, `V4__outbox_first_failed_at.sql`. The service never reads monolith tables; nothing
   else may read `sc_pay_recurring_mandates`.
 
 ## 2. Cutover plan (routing only)
@@ -53,7 +53,7 @@ above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPo
 
 - [x] Service builds and tests standalone (`./gradlew check`, including PostgreSQL integration tests with `TEST_DB_URL`)
 - [x] Own schema and migrations; Hibernate validates entities at startup
-- [x] Events written through a transactional outbox, relayed in order with one active relay; poison events parked
+- [x] Events written through a transactional outbox, relayed in order with one active relay; permanent failures parked at once, retryable failures parked only after 24 h of continuous failure
 - [x] Idempotent collections (`x-idempotency-key`, unique per TPP in the database, race-tested)
 - [x] Monthly limit enforced under concurrency (advisory lock per mandate plus version compare-and-set)
 - [x] Debtor account check through the accounts API with a service token, failing closed
@@ -61,3 +61,39 @@ above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPo
 - [ ] Topics `evt.pay.mandate.*.v1` in the platform topic catalog and AsyncAPI catalog PR merged
 - [ ] Mesh ALLOW rule for the ingress gateway (mesh repository)
 - [ ] Ingress route switched; monolith `recurringpayments` removed
+
+## 4. Parked outbox events
+
+The relay has no attempt cap. A retryable Kafka failure (any `RetriableException`
+such as `TimeoutException`, `NotEnoughReplicasException`, `NetworkException`, or the
+relay's own send timeout) stops the batch and is retried on the next run; it parks
+the row only when that row has been failing continuously for longer than
+`mandates.outbox.relay.retryable-park-after` (`OUTBOX_RELAY_RETRYABLE_PARK_AFTER`,
+default `PT24H`), measured from its `first_failed_at` (V4). An ordinary broker or
+egress outage therefore parks nothing; it shows as a growing
+`outbox_oldest_pending_age_seconds`. A permanent failure (`RecordTooLargeException`,
+`SerializationException`, `TopicAuthorizationException`, `InvalidTopicException`,
+anything not retriable) parks the row at once and the batch continues.
+
+`outbox_parked_events` above 0 means a consumer is missing an event. Find the rows:
+
+```sql
+SELECT event_id, created_seq, topic, aggregate_id, attempts, first_failed_at, last_error, parked_at
+FROM sc_pay_recurring_mandates.mandate_outbox_event
+WHERE parked_at IS NOT NULL
+ORDER BY created_seq;
+```
+
+Fix the cause (topic ACL, topic missing, payload size), then replay. Reset
+`first_failed_at` as well, otherwise the 24 h ceiling parks the row again on its
+first retryable failure:
+
+```sql
+UPDATE sc_pay_recurring_mandates.mandate_outbox_event
+SET parked_at = NULL, first_failed_at = NULL, attempts = 0, last_error = NULL
+WHERE event_id = '<event id>';
+```
+
+The replayed row goes out in `created_seq` order on the next run. A parked event can
+put a mandate's later events ahead of it; consumers order by `aggregateVersion` in the
+envelope and de-duplicate on `eventId`.

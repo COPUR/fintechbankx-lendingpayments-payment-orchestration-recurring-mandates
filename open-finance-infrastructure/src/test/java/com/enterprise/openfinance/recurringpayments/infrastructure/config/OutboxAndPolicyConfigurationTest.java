@@ -52,7 +52,7 @@ class OutboxAndPolicyConfigurationTest {
         OutboxConfiguration.RelayConfiguration relayConfiguration = new OutboxConfiguration.RelayConfiguration();
         SpringDataOutboxRepository outbox = mock(SpringDataOutboxRepository.class);
         OutboxRelay relay = relayConfiguration.outboxRelay(outbox, mock(KafkaTemplate.class),
-                mock(PlatformTransactionManager.class), Clock.systemUTC(), 10, 3, Duration.ofSeconds(1), Duration.ofDays(1));
+                mock(PlatformTransactionManager.class), Clock.systemUTC(), 10, Duration.ofSeconds(1), Duration.ofDays(1), Duration.ofHours(24));
         assertThat(relay).isNotNull();
 
         OutboxRelay mockRelay = mock(OutboxRelay.class);

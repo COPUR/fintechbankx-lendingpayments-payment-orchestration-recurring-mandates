@@ -12,8 +12,9 @@ import java.util.UUID;
 
 /**
  * Row of sc_pay_recurring_mandates.mandate_outbox_event: one envelope waiting to be
- * relayed to Kafka. Written in the mandate's transaction. A row that fails
- * maxAttempts times is parked (parked_at set) and skipped by the relay.
+ * relayed to Kafka. Written in the mandate's transaction. A parked row
+ * (parked_at set) is skipped by the relay until an operator replays it; see
+ * OutboxRelay for when a row is parked.
  */
 @Entity
 @Table(name = "mandate_outbox_event")
@@ -59,6 +60,10 @@ public class OutboxEventJpaEntity {
     @Column(name = "parked_at")
     private Instant parkedAt;
 
+    /** First failed send; the retryable-failure ceiling is measured from here. */
+    @Column(name = "first_failed_at")
+    private Instant firstFailedAt;
+
     @Column(name = "attempts", nullable = false)
     private int attempts;
 
@@ -95,6 +100,7 @@ public class OutboxEventJpaEntity {
     public String getTraceparent() { return traceparent; }
     public Instant getPublishedAt() { return publishedAt; }
     public Instant getParkedAt() { return parkedAt; }
+    public Instant getFirstFailedAt() { return firstFailedAt; }
     public int getAttempts() { return attempts; }
     public String getLastError() { return lastError; }
 
@@ -104,12 +110,17 @@ public class OutboxEventJpaEntity {
         this.lastError = null;
     }
 
-    /** Records a failed send; parks the row once it has failed maxAttempts times. */
-    void markFailed(String error, int maxAttempts, Instant at) {
+    /** Records a failed send; the first one starts the retryable-failure clock. */
+    void markFailed(String error, Instant at) {
+        if (firstFailedAt == null) {
+            this.firstFailedAt = at;
+        }
         this.attempts++;
         this.lastError = error == null ? null : error.substring(0, Math.min(error.length(), MAX_ERROR_LENGTH));
-        if (attempts >= maxAttempts) {
-            this.parkedAt = at;
-        }
+    }
+
+    /** Takes the row out of the relay's queue until an operator replays it. */
+    void park(Instant at) {
+        this.parkedAt = at;
     }
 }

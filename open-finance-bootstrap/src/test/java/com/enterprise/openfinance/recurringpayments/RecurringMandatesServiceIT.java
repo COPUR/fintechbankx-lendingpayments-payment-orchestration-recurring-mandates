@@ -291,7 +291,7 @@ class RecurringMandatesServiceIT {
 
     @Test
     @SuppressWarnings("unchecked")
-    void relayPublishesInOrderKeyedByMandateAndParksAPoisonEventWithoutBlockingOthers() throws Exception {
+    void relayPublishesInOrderKeyedByMandateAndParksAPermanentFailureAtOnce() throws Exception {
         String first = createConsent("5000.00", null);
         submit(first, "IDEMP-RELAY-1", "10.00");
         String second = createConsent("700.00", null);
@@ -299,30 +299,63 @@ class RecurringMandatesServiceIT {
         when(kafka.send(any(ProducerRecord.class))).thenAnswer(invocation -> {
             ProducerRecord<String, String> record = invocation.getArgument(0);
             if (record.key().equals(first) && record.topic().endsWith(".created.v1")) {
-                return CompletableFuture.failedFuture(new IllegalStateException("broker rejected"));
+                return CompletableFuture.failedFuture(
+                        new org.apache.kafka.common.errors.RecordTooLargeException("The message is 2000000 bytes"));
             }
             return CompletableFuture.completedFuture((SendResult<String, String>) null);
         });
-        OutboxRelay relay = new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager),
-                Clock.systemUTC(), 100, 2, Duration.ofSeconds(5), Duration.ofDays(7));
 
-        assertThat(relay.relayOnce()).isEqualTo(1); // second mandate's event; first mandate waits behind its failed event
-        assertThat(relay.relayOnce()).isEqualTo(1); // first mandate's created event parked, its payment event goes out
+        assertThat(relay().relayOnce()).isEqualTo(2); // poison parked at once, the batch goes on
 
         assertThat(outbox.countPending()).isZero();
         assertThat(outbox.countParked()).isEqualTo(1);
+        java.util.Map<String, Object> parked = jdbc.queryForMap("select attempts, first_failed_at, last_error from "
+                + SCHEMA + ".mandate_outbox_event where parked_at is not null");
+        assertThat(parked.get("attempts")).isEqualTo(1);
+        assertThat(parked.get("first_failed_at")).isNotNull();
+        assertThat((String) parked.get("last_error")).startsWith("RecordTooLargeException: The message is 2000000 bytes");
         ArgumentCaptor<ProducerRecord<String, String>> records = ArgumentCaptor.forClass(ProducerRecord.class);
-        Mockito.verify(kafka, Mockito.times(4)).send(records.capture());
+        Mockito.verify(kafka, Mockito.times(3)).send(records.capture());
         List<String> delivered = new ArrayList<>();
-        for (int i = 0; i < records.getAllValues().size(); i++) {
-            ProducerRecord<String, String> r = records.getAllValues().get(i);
+        for (ProducerRecord<String, String> r : records.getAllValues()) {
             delivered.add(r.key().equals(first) ? "first:" + r.topic() : "second:" + r.topic());
         }
         assertThat(delivered).containsExactly(
                 "first:evt.pay.mandate.created.v1",
-                "second:evt.pay.mandate.created.v1",
-                "first:evt.pay.mandate.created.v1",
-                "first:evt.pay.mandate.payment-accepted.v1");
+                "first:evt.pay.mandate.payment-accepted.v1",
+                "second:evt.pay.mandate.created.v1");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void aBrokerOutageNeverParksUntilARowHasFailedFor24Hours() throws Exception {
+        String mandate = createConsent("5000.00", null);
+        submit(mandate, "IDEMP-OUTAGE-1", "10.00");
+        when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.failedFuture(
+                new org.apache.kafka.common.errors.TimeoutException("Expiring 1 record(s): broker unavailable")));
+        OutboxRelay relay = relay();
+
+        for (int run = 0; run < 25; run++) {
+            assertThat(relay.relayOnce()).isZero();
+        }
+
+        assertThat(outbox.countParked()).as("retryable failures never count toward parking").isZero();
+        assertThat(outbox.countPending()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("select max(attempts) from " + SCHEMA + ".mandate_outbox_event", Integer.class))
+                .isEqualTo(25);
+        Mockito.verify(kafka, Mockito.times(25)).send(any(ProducerRecord.class)); // the batch stops at the stuck row
+
+        // The same row has now been failing since 25 h ago: the next retryable failure parks it.
+        jdbc.update("update " + SCHEMA + ".mandate_outbox_event set first_failed_at = now() - interval '25 hours'"
+                + " where first_failed_at is not null");
+        assertThat(relay.relayOnce()).isZero();
+        assertThat(outbox.countParked()).isEqualTo(1);
+        assertThat(outbox.countPending()).isEqualTo(1);
+    }
+
+    private OutboxRelay relay() {
+        return new OutboxRelay(outbox, kafka, new TransactionTemplate(transactionManager),
+                Clock.systemUTC(), 100, Duration.ofSeconds(5), Duration.ofDays(7), Duration.ofHours(24));
     }
 
     @Test
