@@ -3,7 +3,8 @@
 // Status: Proposed (API Governance Guild review required).
 //
 // `asyncapi diff` (@asyncapi/cli 2.13.0) does not support AsyncAPI 3.0 documents, so the rule set is
-// implemented here. Each top-level asyncapi/*.yaml|yml is compared with the same file at the merge base
+// implemented here. Each top-level <dir>/*.yaml|yml (dir = ASYNCAPI_DIR, default asyncapi; providers set their own,
+// for example api/asyncapi) is compared with the same file at the merge base
 // of BASE_REF (default origin/main) and HEAD. Specs that do not exist at the base are skipped (new files).
 //
 // Breaking findings (each one fails the gate):
@@ -26,7 +27,7 @@
 //                      lowered retention.ms (ordering per key, compaction and replay depend on them)
 //   changed-message-key the message's Kafka key schema changed (descriptions excepted)
 //
-// Accepted exceptions: asyncapi/<spec-name>.accepted-breaking.txt (same name as the spec without the
+// Accepted exceptions: <dir>/<spec-name>.accepted-breaking.txt (same name as the spec without the
 // extension), one finding key per line as printed below; '#' starts a comment. Use it only with a
 // documented major-version and dual-publish plan.
 import fs from 'node:fs';
@@ -156,6 +157,18 @@ export function compareSpecs(file, readBase, readHead) {
   return findings;
 }
 
+/**
+ * The spec directory, relative to the repository root: ASYNCAPI_DIR, default 'asyncapi' (the catalog layout).
+ * Provider repositories set it to their own directory (for example api/asyncapi) and run this script unchanged.
+ */
+export function specDir(value) {
+  const dir = (value ?? '').trim().replace(/\/+$/, '') || 'asyncapi';
+  if (dir.startsWith('/') || dir.split('/').some((part) => part === '..' || part === '.' || part === '')) {
+    throw new Error(`ASYNCAPI_DIR must be a relative path inside the repository, got "${value}"`);
+  }
+  return dir;
+}
+
 export function readAccepted(text) {
   return new Set((text ?? '').split('\n').map((l) => l.replace(/#.*$/, '').trim()).filter(Boolean));
 }
@@ -183,12 +196,13 @@ function main() {
   } catch {
     // unrelated histories: compare with the ref itself
   }
-  const isSpec = (f) => /^asyncapi\/[^/]+\.ya?ml$/.test(f);
-  const baseSpecs = git(['ls-tree', '--name-only', `${base}`, 'asyncapi/']).split('\n').filter(isSpec);
-  const headSpecs = fs.existsSync('asyncapi')
-    ? fs.readdirSync('asyncapi').map((n) => `asyncapi/${n}`).filter((f) => isSpec(f) && fs.statSync(f).isFile())
+  const dir = specDir(process.env.ASYNCAPI_DIR);
+  const isSpec = (f) => f.startsWith(`${dir}/`) && /^[^/]+\.ya?ml$/.test(f.slice(dir.length + 1));
+  const baseSpecs = git(['ls-tree', '--name-only', `${base}`, `${dir}/`]).split('\n').filter(isSpec);
+  const headSpecs = fs.existsSync(dir)
+    ? fs.readdirSync(dir).map((n) => `${dir}/${n}`).filter((f) => isSpec(f) && fs.statSync(f).isFile())
     : [];
-  console.log(`asyncapi breaking check: base ${baseRef} (merge base ${base.slice(0, 12)})`);
+  console.log(`asyncapi breaking check: ${dir}/ against base ${baseRef} (merge base ${base.slice(0, 12)})`);
   const readHead = (f) => (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null);
   const readBase = (f) => gitShow(base, f);
   let failed = 0;
@@ -220,7 +234,7 @@ function main() {
     }
   }
   if (failed > 0) {
-    console.error(`asyncapi breaking check failed: ${failed} finding(s). Publish a new major version on a new topic (.v2) with dual-publish, or list accepted findings in asyncapi/<spec-name>.accepted-breaking.txt.`);
+    console.error(`asyncapi breaking check failed: ${failed} finding(s). Publish a new major version on a new topic (.v2) with dual-publish, or list accepted findings in ${dir}/<spec-name>.accepted-breaking.txt.`);
     process.exit(1);
   }
   console.log('asyncapi breaking check passed');

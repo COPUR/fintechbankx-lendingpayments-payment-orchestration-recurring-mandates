@@ -141,10 +141,12 @@ jobs:
           # Always main: versions count from the first merge to main; before that the spec is
           # pre-release and stays 1.0.0 (asyncapi-catalog README, "Change rules").
           BASE_REF: origin/main
+          # The catalog script, unchanged, reads the spec directory from ASYNCAPI_DIR.
+          ASYNCAPI_DIR: api/asyncapi
           NPM_CONFIG_CACHE: /tmp/.npm
         run: |
           npm install --no-save --no-package-lock yaml@2.9.1
-          ./scripts/ci/asyncapi-provider-breaking.sh
+          ./scripts/ci/asyncapi-breaking.sh
 
       - name: Install oasdiff
         if: ${{ hashFiles('api/openapi/*.yaml') != '' }}
