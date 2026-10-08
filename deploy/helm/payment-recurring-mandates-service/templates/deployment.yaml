@@ -101,6 +101,15 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: rds-ca-bundle
+              mountPath: {{ .Values.rdsCaBundle.mountPath }}
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: rds-ca-bundle
+          configMap:
+            name: {{ .Values.rdsCaBundle.configMapName }}
+            items:
+              - key: {{ .Values.rdsCaBundle.key }}
+                path: {{ .Values.rdsCaBundle.key }}

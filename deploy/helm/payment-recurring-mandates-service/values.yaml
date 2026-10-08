@@ -55,7 +55,10 @@ networkPolicy:
 # Non-secret runtime settings, rendered into a ConfigMap. Values marked
 # "required" fail the render when empty.
 config:
-  DB_URL: ""                      # required: jdbc:postgresql://<aurora-writer>:5432/db_pay_recurring_mandates_<env>?sslmode=require
+  # required (deploy/terraform output jdbc_url). Must verify the server
+  # certificate against the mounted RDS CA bundle (rdsCaBundle below), e.g.
+  # jdbc:postgresql://<aurora-writer>:5432/db_pay_recurring_mandates_<env>?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem
+  DB_URL: ""
   DB_USERNAME: pay_recurring_mandates_app
   DB_POOL_MAX: "10"
   KAFKA_BOOTSTRAP_SERVERS: ""     # required: MSK bootstrap_brokers_sasl_iam (port 9098)
@@ -80,6 +83,15 @@ config:
   ACCOUNTS_SERVICE_PATH: /api/v1/accounts/{accountId}
   OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.*.v1 exist on the cluster
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
+
+# Amazon RDS CA bundle (platform contract "Database CA bundle"): ConfigMap
+# rds-ca-bundle, key global-bundle.pem, published by trust-manager into every
+# service namespace. Mounted read-only so DB_URL can use sslmode=verify-full
+# with sslrootcert=<mountPath>/global-bundle.pem. The chart ships no copy.
+rdsCaBundle:
+  configMapName: rds-ca-bundle
+  key: global-bundle.pem
+  mountPath: /etc/ssl/rds
 
 # Credentials, synced from AWS Secrets Manager by External Secrets Operator.
 externalSecret:

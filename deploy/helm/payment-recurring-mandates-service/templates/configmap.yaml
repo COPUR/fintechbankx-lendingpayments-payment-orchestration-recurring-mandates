@@ -2,6 +2,11 @@
 {{- range $key := $required }}
 {{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
 {{- end }}
+{{- /* Aurora: verify the server certificate against the mounted RDS CA bundle. */ -}}
+{{- $rootcert := printf "sslrootcert=%s/%s" .Values.rdsCaBundle.mountPath .Values.rdsCaBundle.key }}
+{{- if not (and (contains "sslmode=verify-full" .Values.config.DB_URL) (contains $rootcert .Values.config.DB_URL)) }}
+{{- fail (printf "config.DB_URL must use sslmode=verify-full&%s (mounted ConfigMap %s)" $rootcert .Values.rdsCaBundle.configMapName) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

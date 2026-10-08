@@ -43,6 +43,11 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | Cutover | [Runbook](docs/migration/RUNBOOK-EXTRACT-pay-recurring-mandates.md), [regression mapping](docs/migration/REGRESSION_MAPPING.md) |
 | Architecture | [Deployment and Well-Architected notes](docs/architecture/DEPLOYMENT_AND_WELL_ARCHITECTED.md) |
 
+Deployed, the pods verify Aurora's certificate: `DB_URL` must carry
+`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem` (Terraform output
+`jdbc_url`), and the chart mounts the platform ConfigMap `rds-ca-bundle` there. Local
+runs and tests keep their own URLs.
+
 The outbox relay is off by default (`OUTBOX_RELAY_ENABLED=false`) until the
 topics exist in the platform topic catalog; the AsyncAPI catalog PR is pending.
 
