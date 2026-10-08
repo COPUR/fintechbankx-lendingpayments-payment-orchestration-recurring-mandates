@@ -30,13 +30,24 @@ info:
   x-owning-squad: Recurring and Bulk Payments Squad
 defaultContentType: application/json
 servers:
-  kafka:
+  msk:
     host: '{bootstrapServers}'
     protocol: kafka-secure
-    description: FinTechBankX event platform cluster. MSK IAM (SASL_SSL) on AWS, mutual TLS on Strimzi.
+    description: Amazon MSK cluster of the FinTechBankX event platform (svc-evt-streaming) on AWS. TLS in transit,
+      SASL_SSL with mechanism AWS_MSK_IAM using the service's IRSA role (ADR-024, platform contract 2026-10-08).
     variables:
       bootstrapServers:
-        description: Bootstrap servers, injected per environment by the platform.
+        description: MSK IAM bootstrap brokers (port 9098), injected per environment by the platform.
+    security:
+    - $ref: '#/components/securitySchemes/mskIam'
+  local:
+    host: '{bootstrapServers}'
+    protocol: kafka-secure
+    description: Strimzi cluster in namespace kafka, for local and non-AWS environments only. Mutual TLS with
+      Strimzi-issued client certificates.
+    variables:
+      bootstrapServers:
+        description: Strimzi TLS bootstrap service, injected per environment.
     security:
     - $ref: '#/components/securitySchemes/mtls'
 channels:
@@ -306,6 +317,12 @@ components:
           bindingVersion: 0.5.0
       x-source-class: com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted
   securitySchemes:
+    mskIam:
+      type: userPassword
+      description: SASL_SSL with SASL mechanism AWS_MSK_IAM. There is no user or password; the client signs with the
+        AWS credentials of its IRSA role, and a topic-scoped IAM policy (terraform module msk-client-access) grants
+        produce or consume rights. AsyncAPI has no IAM scheme type, so userPassword stands for the SASL family.
+      x-sasl-mechanism: AWS_MSK_IAM
     mtls:
       type: X509
-      description: Mutual TLS with platform-issued client certificates (Strimzi); MSK uses IAM via the pod role.
+      description: Mutual TLS with Strimzi-issued client certificates (local and non-AWS clusters only).
