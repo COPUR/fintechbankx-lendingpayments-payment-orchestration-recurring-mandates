@@ -84,6 +84,8 @@ spring:
 server:
   port: 8080
   shutdown: graceful
+  # DPoP htu is the public URL: the ingress gateway overwrites X-Forwarded-Proto/Host/Port
+  # and strips Forwarded and X-Forwarded-Prefix. X-Forwarded-For is never used for authorization.
   forward-headers-strategy: framework
 
 management:

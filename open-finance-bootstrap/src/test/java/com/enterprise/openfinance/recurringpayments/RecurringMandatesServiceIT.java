@@ -347,6 +347,27 @@ class RecurringMandatesServiceIT {
     }
 
     @Test
+    void htuIsTheUrlTheGatewayForwardsAndAProofForAnotherUrlIs401() throws Exception {
+        // The ingress gateway sets X-Forwarded-Proto/Host/Port (server.forward-headers-strategy=framework).
+        String publicUrl = "https://api.fintechbankx.example/open-finance/v1/vrp/payment-consents/CONS-ANY";
+        mvc.perform(get("/open-finance/v1/vrp/payment-consents/CONS-ANY")
+                        .header("X-Forwarded-Proto", "https").header("X-Forwarded-Host", "api.fintechbankx.example")
+                        .header("X-Forwarded-Port", "443").header("X-Forwarded-For", "203.0.113.9")
+                        .header("Authorization", "DPoP tok-" + TPP)
+                        .header("DPoP", ItDpop.proof("GET", publicUrl, "tok-" + TPP))
+                        .header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isNotFound());
+        // The pod-internal URL is not what the TPP signed: 401.
+        mvc.perform(get("/open-finance/v1/vrp/payment-consents/CONS-ANY")
+                        .header("X-Forwarded-Proto", "https").header("X-Forwarded-Host", "api.fintechbankx.example")
+                        .header("X-Forwarded-Port", "443")
+                        .header("Authorization", "DPoP tok-" + TPP)
+                        .header("DPoP", ItDpop.proof("GET", "http://localhost/open-finance/v1/vrp/payment-consents/CONS-ANY", "tok-" + TPP))
+                        .header("x-fapi-interaction-id", "it-1"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void healthAndUnknownPathsAreHandledBySecurity() throws Exception {
         mvc.perform(asTpp(get("/internal/anything"))).andExpect(status().isForbidden());
     }
