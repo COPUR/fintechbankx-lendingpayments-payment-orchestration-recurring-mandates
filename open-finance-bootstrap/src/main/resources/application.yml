@@ -55,7 +55,11 @@ spring:
       properties:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
+        # Kafka requires delivery.timeout.ms >= linger.ms + request.timeout.ms
+        # (KafkaProducerConfigurationTest); the default 30 s request timeout would
+        # stop the producer from starting.
         delivery.timeout.ms: 30000
+        request.timeout.ms: 20000
         linger.ms: 5
   security:
     oauth2:
@@ -141,7 +145,8 @@ mandates:
       interval: PT1S
       batch-size: 100
       max-attempts: ${OUTBOX_RELAY_MAX_ATTEMPTS:10}
-      send-timeout: PT10S
+      # Longer than delivery.timeout.ms, so the relay never gives up on a send Kafka is still retrying.
+      send-timeout: PT35S
 
 logging:
   pattern:
