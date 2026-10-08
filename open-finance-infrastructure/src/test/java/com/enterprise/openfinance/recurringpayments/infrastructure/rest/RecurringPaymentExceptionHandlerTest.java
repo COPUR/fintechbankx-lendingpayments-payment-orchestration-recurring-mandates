@@ -69,4 +69,18 @@ class RecurringPaymentExceptionHandlerTest {
         assertThat(malformed.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(malformed.getBody().interactionId()).isEqualTo("ix-err");
     }
+
+    @Test
+    void springClientErrorsKeepTheirStatusInsteadOfBecoming500() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+
+        assertThat(handler.handleUnexpected(new org.springframework.web.HttpRequestMethodNotSupportedException("PUT"),
+                request).getStatusCode().value()).isEqualTo(405);
+        assertThat(handler.handleUnexpected(new org.springframework.web.HttpMediaTypeNotSupportedException("text/plain"),
+                request).getStatusCode().value()).isEqualTo(415);
+        var notFound = handler.handleUnexpected(new org.springframework.web.servlet.resource.NoResourceFoundException(
+                org.springframework.http.HttpMethod.GET, "open-finance/v1/vrp/unknown"), request);
+        assertThat(notFound.getStatusCode().value()).isEqualTo(404);
+        assertThat(notFound.getBody().code()).isEqualTo("NOT_FOUND");
+    }
 }

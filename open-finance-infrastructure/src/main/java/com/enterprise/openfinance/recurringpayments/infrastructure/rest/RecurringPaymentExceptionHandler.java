@@ -14,6 +14,7 @@ import org.springframework.web.bind.ServletRequestBindingException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.ErrorResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -88,6 +89,13 @@ public class RecurringPaymentExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<VrpErrorResponse> handleUnexpected(Exception exception,
                                                              HttpServletRequest request) {
+        // Spring MVC client errors (405, 415, 404 for unknown paths, ...) keep their status.
+        if (exception instanceof ErrorResponse errorResponse && errorResponse.getStatusCode().is4xxClientError()) {
+            int status = errorResponse.getStatusCode().value();
+            String code = status == HttpStatus.NOT_FOUND.value() ? "NOT_FOUND" : "INVALID_REQUEST";
+            return ResponseEntity.status(status)
+                    .body(VrpErrorResponse.of(code, errorResponse.getBody().getDetail(), interactionId(request)));
+        }
         log.error("Unexpected error", exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(VrpErrorResponse.of("INTERNAL_ERROR", "Unexpected error occurred", interactionId(request)));

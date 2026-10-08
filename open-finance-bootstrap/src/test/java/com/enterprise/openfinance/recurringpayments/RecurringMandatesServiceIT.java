@@ -333,6 +333,20 @@ class RecurringMandatesServiceIT {
     }
 
     @Test
+    void malformedAndUnsupportedRequestsKeepTheirOwnStatusInsteadOf401Or403() throws Exception {
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"Data\": {"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+        mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                        .contentType(MediaType.TEXT_PLAIN).content("x"))
+                .andExpect(status().isUnsupportedMediaType());
+        mvc.perform(asTpp(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(
+                        "/open-finance/v1/vrp/payments/{id}", "P-1")))
+                .andExpect(status().isMethodNotAllowed());
+    }
+
+    @Test
     void healthAndUnknownPathsAreHandledBySecurity() throws Exception {
         mvc.perform(asTpp(get("/internal/anything"))).andExpect(status().isForbidden());
     }
