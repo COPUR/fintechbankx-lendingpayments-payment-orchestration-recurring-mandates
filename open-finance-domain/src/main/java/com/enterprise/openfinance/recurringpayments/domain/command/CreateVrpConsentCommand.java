@@ -9,8 +9,15 @@ public record CreateVrpConsentCommand(
         BigDecimal maxAmount,
         String currency,
         Instant expiresAt,
-        String interactionId
+        String interactionId,
+        String debtorAccountId
 ) {
+
+    /** A mandate request without a debtor account to verify. */
+    public CreateVrpConsentCommand(String tppId, String psuId, BigDecimal maxAmount, String currency,
+                                   Instant expiresAt, String interactionId) {
+        this(tppId, psuId, maxAmount, currency, expiresAt, interactionId, null);
+    }
 
     public CreateVrpConsentCommand {
         if (isBlank(tppId)) {
@@ -36,6 +43,7 @@ public record CreateVrpConsentCommand(
         psuId = psuId.trim();
         currency = currency.trim();
         interactionId = interactionId.trim();
+        debtorAccountId = isBlank(debtorAccountId) ? null : debtorAccountId.trim();
     }
 
     private static boolean isBlank(String value) {

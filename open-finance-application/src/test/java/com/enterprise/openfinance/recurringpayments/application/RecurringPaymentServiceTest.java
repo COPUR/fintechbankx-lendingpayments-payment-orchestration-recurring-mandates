@@ -14,6 +14,13 @@ import com.enterprise.openfinance.recurringpayments.domain.model.VrpIdempotencyR
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpPayment;
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpPaymentStatus;
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpSettings;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateCreated;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateEvent;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked;
+import com.enterprise.openfinance.recurringpayments.domain.model.DebtorAccount;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.DebtorAccountPort;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateEventPublisher;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpCachePort;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpConsentPort;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpIdempotencyPort;
@@ -367,6 +374,118 @@ class RecurringPaymentServiceTest {
                 .hasMessageContaining("Payment not found");
     }
 
+    @Test
+    void shouldPublishCreatedRevokedAndPaymentAcceptedEventsWithIncreasingMandateVersions() {
+        TestConsentPort consentPort = new TestConsentPort();
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(consentPort, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort());
+
+        VrpConsent consent = createConsent(service);
+        service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(), "IDEMP-EV-1",
+                new BigDecimal("1250.00"), "AED", "ix-ev"));
+        service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(), "IDEMP-EV-2",
+                new BigDecimal("750.00"), "AED", "ix-ev"));
+        service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-ev", "Customer request"));
+        service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-ev", "Again"));
+
+        assertThat(events.published).extracting(e -> e.getClass().getSimpleName()).containsExactly(
+                "MandateCreated", "MandatePaymentAccepted", "MandatePaymentAccepted", "MandateRevoked");
+        assertThat(events.published).extracting(MandateEvent::aggregateVersion).containsExactly(0L, 1L, 2L, 3L);
+        assertThat(((MandatePaymentAccepted) events.published.get(2)).periodTotal()).isEqualByComparingTo("2000.00");
+        assertThat(((MandateRevoked) events.published.get(3)).reason()).isEqualTo("Customer request");
+        assertThat(consentPort.data.get(consent.consentId()).version()).isEqualTo(3L);
+    }
+
+    @Test
+    void shouldNotPublishAnythingForAnIdempotentReplayOrARejectedPayment() {
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort());
+        VrpConsent consent = createConsent(service);
+        SubmitVrpPaymentCommand payment = new SubmitVrpPaymentCommand("TPP-001", consent.consentId(), "IDEMP-RP-1",
+                new BigDecimal("100.00"), "AED", "ix-rp");
+
+        service.submitCollection(payment);
+        service.submitCollection(payment);
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(),
+                "IDEMP-RP-2", new BigDecimal("4900.01"), "AED", "ix-rp")))
+                .isInstanceOf(BusinessRuleViolationException.class);
+
+        assertThat(events.published).hasSize(2);
+        assertThat(events.published.get(0)).isInstanceOf(MandateCreated.class);
+    }
+
+    @Test
+    void shouldVerifyTheDebtorAccountWhenTheMandateNamesOne() {
+        TestDebtorAccountPort accounts = new TestDebtorAccountPort();
+        accounts.accounts.put("ACC-ACTIVE", new DebtorAccount("ACC-ACTIVE", true, true, "AED"));
+        accounts.accounts.put("ACC-BLOCKED", new DebtorAccount("ACC-BLOCKED", false, true, "AED"));
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, accounts);
+
+        VrpConsent linked = service.createConsent(consentCommand("ACC-ACTIVE"));
+        assertThat(linked.debtorAccountId()).isEqualTo("ACC-ACTIVE");
+
+        assertThatThrownBy(() -> service.createConsent(consentCommand("ACC-UNKNOWN")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account not found");
+        assertThatThrownBy(() -> service.createConsent(consentCommand("ACC-BLOCKED")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account is not active");
+
+        // The account is blocked after the mandate was set up: the next collection is refused.
+        accounts.accounts.put("ACC-ACTIVE", new DebtorAccount("ACC-ACTIVE", true, false, "AED"));
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", linked.consentId(),
+                "IDEMP-DA-1", new BigDecimal("10.00"), "AED", "ix-da")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage("Debtor account does not allow debits");
+        assertThat(events.published).hasSize(1);
+    }
+
+    @Test
+    void shouldRejectACollectionWhenTheMandateWasRevokedWhileWaitingForTheLock() {
+        TestConsentPort consentPort = new TestConsentPort();
+        RecurringPaymentService[] holder = new RecurringPaymentService[1];
+        VrpLockPort revokingLock = new VrpLockPort() {
+            @Override
+            public <T> T withConsentLock(String consentId, java.util.function.Supplier<T> operation) {
+                VrpConsent current = consentPort.data.get(consentId);
+                if (!current.isRevoked()) {
+                    consentPort.save(current.revoke(CLOCK.instant(), "Concurrent revoke").mandate());
+                }
+                return operation.get();
+            }
+        };
+        holder[0] = service(consentPort, new TestPaymentPort(), new TestIdempotencyPort(), new TestCachePort(), revokingLock);
+        VrpConsent consent = createConsent(holder[0]);
+
+        assertThatThrownBy(() -> holder[0].submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(),
+                "IDEMP-LOCK-1", new BigDecimal("10.00"), "AED", "ix-lock")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
+    }
+
+    private static CreateVrpConsentCommand consentCommand(String debtorAccountId) {
+        return new CreateVrpConsentCommand("TPP-001", "PSU-001", new BigDecimal("5000.00"), "AED",
+                Instant.parse("2099-01-01T00:00:00Z"), "ix-create", debtorAccountId);
+    }
+
+    private static final class RecordingEventPublisher implements MandateEventPublisher {
+        private final List<MandateEvent> published = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(List<MandateEvent> events) {
+            published.addAll(events);
+        }
+    }
+
+    private static final class TestDebtorAccountPort implements DebtorAccountPort {
+        private final Map<String, DebtorAccount> accounts = new ConcurrentHashMap<>();
+
+        @Override
+        public Optional<DebtorAccount> findDebtorAccount(String accountId) {
+            return Optional.ofNullable(accounts.get(accountId));
+        }
+    }
+
     private static Callable<Boolean> paymentTask(RecurringPaymentService service,
                                                  String consentId,
                                                  String idemKey,
@@ -409,12 +528,27 @@ class RecurringPaymentServiceTest {
             VrpCachePort cachePort,
             VrpLockPort lockPort
     ) {
+        return service(consentPort, paymentPort, idempotencyPort, cachePort, lockPort,
+                new RecordingEventPublisher(), new TestDebtorAccountPort());
+    }
+
+    private static RecurringPaymentService service(
+            VrpConsentPort consentPort,
+            VrpPaymentPort paymentPort,
+            VrpIdempotencyPort idempotencyPort,
+            VrpCachePort cachePort,
+            VrpLockPort lockPort,
+            MandateEventPublisher eventPublisher,
+            DebtorAccountPort debtorAccountPort
+    ) {
         return new RecurringPaymentService(
                 consentPort,
                 paymentPort,
                 idempotencyPort,
                 cachePort,
                 lockPort,
+                eventPublisher,
+                debtorAccountPort,
                 new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30)),
                 CLOCK
         );

@@ -29,7 +29,7 @@ class VrpConsentTest {
         assertThat(consent.isActive(Instant.parse("2100-01-01T00:00:00Z"))).isFalse();
         assertThat(consent.isRevoked()).isFalse();
 
-        VrpConsent revoked = consent.revoke(Instant.parse("2026-02-09T10:00:00Z"));
+        VrpConsent revoked = consent.revoke(Instant.parse("2026-02-09T10:00:00Z"), "Customer request").mandate();
 
         assertThat(revoked.status()).isEqualTo(VrpConsentStatus.REVOKED);
         assertThat(revoked.revokedAt()).isEqualTo(Instant.parse("2026-02-09T10:00:00Z"));
