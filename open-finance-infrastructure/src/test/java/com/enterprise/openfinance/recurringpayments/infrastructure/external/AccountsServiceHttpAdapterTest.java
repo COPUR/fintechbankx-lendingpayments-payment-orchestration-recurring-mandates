@@ -22,7 +22,8 @@ class AccountsServiceHttpAdapterTest {
 
     private final RestClient.Builder builder = RestClient.builder().baseUrl("http://accounts.test");
     private final MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
-    private final AccountsServiceHttpAdapter adapter = new AccountsServiceHttpAdapter(builder.build(), () -> "svc-token");
+    private final AccountsServiceHttpAdapter adapter = new AccountsServiceHttpAdapter(builder.build(),
+            AccountsServiceHttpAdapter.DEFAULT_PATH, () -> "svc-token");
 
     @AfterEach
     void clearMdc() {
@@ -61,6 +62,28 @@ class AccountsServiceHttpAdapterTest {
                 .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
 
         assertThatThrownBy(() -> adapter.findDebtorAccount("ACC-3")).isInstanceOf(HttpServerErrorException.class);
+    }
+
+    @Test
+    void thePathIsConfigurableSoTheInterimSystemOfRecordCanServeIt() {
+        RestClient.Builder interimBuilder = RestClient.builder().baseUrl("http://interim.test");
+        MockRestServiceServer interim = MockRestServiceServer.bindTo(interimBuilder).build();
+        AccountsServiceHttpAdapter interimAdapter = new AccountsServiceHttpAdapter(interimBuilder.build(),
+                "/internal/accounts/{accountId}/status", () -> "svc-token");
+        interim.expect(requestTo("http://interim.test/internal/accounts/ACC-9/status"))
+                .andRespond(withSuccess("{\"status\": \"ACTIVE\", \"currency\": \"AED\", \"debitAllowed\": true}",
+                        MediaType.APPLICATION_JSON));
+
+        assertThat(interimAdapter.findDebtorAccount("ACC-9")).contains(new DebtorAccount("ACC-9", true, true, "AED"));
+        assertThat(AccountsServiceHttpAdapter.DEFAULT_PATH).isEqualTo("/api/v1/accounts/{accountId}");
+        interim.verify();
+    }
+
+    @Test
+    void aPathWithoutTheAccountIdPlaceholderIsRejectedAtStartup() {
+        assertThatThrownBy(() -> new AccountsServiceHttpAdapter(builder.build(), "/api/v1/accounts", () -> "t"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("{accountId}");
     }
 
     @Test

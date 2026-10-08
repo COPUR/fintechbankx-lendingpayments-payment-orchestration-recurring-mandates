@@ -144,7 +144,11 @@ mandates:
   accounts:
     # http: accounts API (default, fails closed). in-memory: demo accounts for local runs only.
     adapter: ${ACCOUNTS_ADAPTER:http}
+    # Interim: no system serves the account-status read to services yet (the
+    # monolith only has the TPP-facing AIS read). Point both at the system of
+    # record once it exists; until then calls fail closed with 503.
     base-url: ${ACCOUNTS_SERVICE_BASE_URL:http://accounts-service:8080}
+    path: ${ACCOUNTS_SERVICE_PATH:/api/v1/accounts/{accountId}}
     client-registration-id: accounts-service
     connect-timeout: PT1S
     read-timeout: PT2S

@@ -66,7 +66,8 @@ class AccountsClientConfigurationTest {
                 new InMemoryOAuth2AuthorizedClientService(registrations));
 
         DebtorAccountPort port = http.accountsServiceDebtorAccountPort(RestClient.builder(), manager,
-                "http://accounts.test", "accounts-service", Duration.ofSeconds(1), Duration.ofSeconds(2));
+                "http://accounts.test", "/api/v1/accounts/{accountId}", "accounts-service",
+                Duration.ofSeconds(1), Duration.ofSeconds(2));
 
         assertThat(port).isInstanceOf(AccountsServiceHttpAdapter.class);
         assertThat(new AccountsClientConfiguration().inMemoryDebtorAccountPort()).isInstanceOf(InMemoryDebtorAccountAdapter.class);

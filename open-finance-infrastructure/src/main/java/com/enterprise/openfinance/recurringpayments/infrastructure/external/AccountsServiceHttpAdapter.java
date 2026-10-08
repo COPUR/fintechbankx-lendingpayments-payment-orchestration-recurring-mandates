@@ -18,21 +18,34 @@ import java.util.function.Supplier;
  * which owns account status. This service never reads account tables and
  * never stores balances or holder data.
  *
- * Expected provider contract: GET /api/v1/accounts/{accountId} returning
- * accountId, status (ACTIVE when usable), currency and debitAllowed; 404 for an
- * unknown account. Unknown fields are ignored. Calls carry this service's own
- * client-credentials token. Fails closed: errors other than 404 propagate and
- * the request is refused (503).
+ * Expected provider contract: GET {path} (default /api/v1/accounts/{accountId},
+ * mandates.accounts.path) returning accountId, status (ACTIVE when usable),
+ * currency and debitAllowed; 404 for an unknown account. Unknown fields are
+ * ignored. Calls carry this service's own client-credentials token. Fails
+ * closed: errors other than 404 propagate and the request is refused (503).
+ *
+ * Interim: no system serves this contract to services today. The monolith's
+ * only account read is the TPP-facing AIS endpoint GET
+ * /open-finance/v1/accounts/{accountId}, which needs a PSU's AIS consent and a
+ * DPoP-bound TPP token and has no debit flag, so it cannot be called with a
+ * service token. Base URL and path are configurable so the system of record
+ * can be wired in without a code change.
  */
 public class AccountsServiceHttpAdapter implements DebtorAccountPort {
 
     static final String INTERACTION_ID_HEADER = "x-fapi-interaction-id";
+    public static final String DEFAULT_PATH = "/api/v1/accounts/{accountId}";
 
     private final RestClient restClient;
+    private final String path;
     private final Supplier<String> serviceToken;
 
-    public AccountsServiceHttpAdapter(RestClient restClient, Supplier<String> serviceToken) {
+    public AccountsServiceHttpAdapter(RestClient restClient, String path, Supplier<String> serviceToken) {
+        if (path == null || !path.contains("{accountId}")) {
+            throw new IllegalArgumentException("mandates.accounts.path must contain {accountId}: " + path);
+        }
         this.restClient = restClient;
+        this.path = path;
         this.serviceToken = serviceToken;
     }
 
@@ -40,7 +53,7 @@ public class AccountsServiceHttpAdapter implements DebtorAccountPort {
     public Optional<DebtorAccount> findDebtorAccount(String accountId) {
         try {
             AccountView view = restClient.get()
-                    .uri("/api/v1/accounts/{accountId}", accountId)
+                    .uri(path, accountId)
                     .headers(this::addCallerHeaders)
                     .retrieve()
                     .body(AccountView.class);

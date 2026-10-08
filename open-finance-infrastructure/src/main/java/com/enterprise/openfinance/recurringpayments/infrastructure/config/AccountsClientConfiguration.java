@@ -60,6 +60,7 @@ public class AccountsClientConfiguration {
                 RestClient.Builder builder,
                 OAuth2AuthorizedClientManager serviceAuthorizedClientManager,
                 @Value("${mandates.accounts.base-url}") String baseUrl,
+                @Value("${mandates.accounts.path:" + AccountsServiceHttpAdapter.DEFAULT_PATH + "}") String path,
                 @Value("${mandates.accounts.client-registration-id:accounts-service}") String registrationId,
                 @Value("${mandates.accounts.connect-timeout:PT1S}") Duration connectTimeout,
                 @Value("${mandates.accounts.read-timeout:PT2S}") Duration readTimeout) {
@@ -70,7 +71,7 @@ public class AccountsClientConfiguration {
                     .baseUrl(baseUrl)
                     .requestFactory(ClientHttpRequestFactories.get(settings))
                     .build();
-            return new AccountsServiceHttpAdapter(client, serviceToken(serviceAuthorizedClientManager, registrationId));
+            return new AccountsServiceHttpAdapter(client, path, serviceToken(serviceAuthorizedClientManager, registrationId));
         }
     }
 

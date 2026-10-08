@@ -70,8 +70,14 @@ config:
   # (internal GET /api/v1/consents/{id}, this service's client-credentials token).
   CONSENT_ADAPTER: http
   CONSENT_SERVICE_BASE_URL: http://consent-authorization-service.open-finance.svc.cluster.local:8080
+  # Interim: no system serves an account-status read to services yet. The monolith's only
+  # account read is the TPP-facing AIS GET /open-finance/v1/accounts/{accountId} (PSU AIS
+  # consent plus DPoP-bound TPP token, no debit flag), which this service cannot call.
+  # Point base URL and path at the system of record when it exists; until then mandates
+  # that name a debtor account fail closed with 503.
   ACCOUNTS_ADAPTER: http
-  ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API; no fintechbankx repository owns accounts yet
+  ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API base URL
+  ACCOUNTS_SERVICE_PATH: /api/v1/accounts/{accountId}
   OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.*.v1 exist on the cluster
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
 

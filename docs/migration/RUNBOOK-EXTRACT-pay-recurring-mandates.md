@@ -12,7 +12,7 @@ steps of `fbx-monolith-extraction`. Status: **Proposed**.
 | Slice | Mandate aggregate (`VrpConsent`): authorise, read, revoke; collections (`VrpPayment`) under its monthly limit |
 | Owned data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` (DPoP replay cache) |
 | Events | `evt.pay.mandate.created.v1`, `evt.pay.mandate.revoked.v1`, `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.{Created,Revoked,PaymentAccepted}.v1`) (no DLQ here: dead-letter topics belong to consumers, ADR-019/024); contract `api/asyncapi/svc-pay-recurring-mandates.yaml` (catalog PR pending) |
-| Depends on | Keycloak realm `fintechbankx` (TPP tokens with `aud` = service id and DPoP binding `cnf.jkt`, so TPP clients must be DPoP-enabled before cutover; client-credentials client `svc-pay-recurring-mandates`); consent-authorization-service `GET /api/v1/consents/{id}` (`CONSENT_SERVICE_BASE_URL`; this service must be on its allow-list, which the provider branch already has) for the PSU-authorised consent every mandate is bound to; accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` for the optional debtor account |
+| Depends on | Keycloak realm `fintechbankx` (TPP tokens with `aud` = service id and DPoP binding `cnf.jkt`, so TPP clients must be DPoP-enabled before cutover; client-credentials client `svc-pay-recurring-mandates`); consent-authorization-service `GET /api/v1/consents/{id}` (`CONSENT_SERVICE_BASE_URL`; this service must be on its allow-list, which the provider branch already has) for the PSU-authorised consent every mandate is bound to; accounts API `GET /api/v1/accounts/{accountId}` (`ACCOUNTS_SERVICE_BASE_URL` + `ACCOUNTS_SERVICE_PATH`; interim, no provider yet, see checklist) for the debtor account |
 
 ## 1. Data ownership split
 
@@ -57,7 +57,7 @@ above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPo
 - [x] Idempotent collections (`x-idempotency-key`, unique per TPP in the database, race-tested)
 - [x] Monthly limit enforced under concurrency (advisory lock per mandate plus version compare-and-set)
 - [x] Debtor account check through the accounts API with a service token, failing closed
-- [ ] An accounts API serving `GET /api/v1/accounts/{accountId}` (no fintechbankx repository owns accounts yet)
+- [ ] An accounts API serving `GET /api/v1/accounts/{accountId}` to services (interim gap: the monolith has no internal account-status read; its only account read is the TPP-facing AIS `GET /open-finance/v1/accounts/{accountId}` in `open-finance-context`, which needs a PSU AIS consent, a DPoP-bound TPP token and returns `Data.Account.Status` without a debit flag; it is being extracted to svc-of-personal-financial-data. `ACCOUNTS_SERVICE_BASE_URL` and `ACCOUNTS_SERVICE_PATH` are configurable; until a provider exists, mandates naming a debtor account fail closed with 503)
 - [ ] Topics `evt.pay.mandate.*.v1` in the platform topic catalog and AsyncAPI catalog PR merged
 - [ ] Mesh ALLOW rule for the ingress gateway (mesh repository)
 - [ ] Ingress route switched; monolith `recurringpayments` removed
