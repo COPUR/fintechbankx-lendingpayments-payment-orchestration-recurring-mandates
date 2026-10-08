@@ -310,16 +310,27 @@ resource "aws_cloudwatch_metric_alarm" "aurora_capacity" {
   ok_actions          = var.alarm_topic_arn == "" ? [] : [var.alarm_topic_arn]
 }
 
+# Connection budget: every replica at full pool (HPA maxReplicas x DB_POOL_MAX,
+# 12 x 10 = 120 by default) plus headroom for the migration Job and DBA
+# sessions. The alarm fires only above that budget, i.e. on a connection leak
+# or an unexpected client, not under normal peak load. Keep the variables in
+# step with the Helm values (autoscaling.maxReplicas, config.DB_POOL_MAX), and
+# keep the budget below Aurora's max_connections at aurora_min_capacity
+# (Serverless v2 sizes it from capacity).
+locals {
+  db_connection_budget = var.service_max_replicas * var.db_pool_max + var.db_connection_headroom
+}
+
 resource "aws_cloudwatch_metric_alarm" "aurora_connections" {
   alarm_name          = "${local.name}-aurora-connections-high"
-  alarm_description   = "Connections near the pool budget (HPA max replicas x DB_POOL_MAX)."
+  alarm_description   = "Connections above the pool budget (${var.service_max_replicas} replicas x ${var.db_pool_max} + ${var.db_connection_headroom}): leak or unexpected client."
   namespace           = "AWS/RDS"
   metric_name         = "DatabaseConnections"
   dimensions          = { DBClusterIdentifier = aws_rds_cluster.database.cluster_identifier }
   statistic           = "Maximum"
   period              = 300
   evaluation_periods  = 2
-  threshold           = 100
+  threshold           = local.db_connection_budget
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_actions       = var.alarm_topic_arn == "" ? [] : [var.alarm_topic_arn]

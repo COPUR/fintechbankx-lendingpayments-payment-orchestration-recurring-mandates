@@ -12,3 +12,4 @@ aurora_max_capacity        = 2
 backup_retention_days      = 7
 deletion_protection        = false
 msk_cluster_arn            = "arn:aws:kafka:me-central-1:111122223333:cluster/fintechbankx-dev/EXAMPLE"
+service_max_replicas       = 4
