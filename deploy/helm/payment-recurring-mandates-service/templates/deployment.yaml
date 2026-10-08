@@ -62,6 +62,11 @@ spec:
               containerPort: {{ .Values.service.port }}
             - name: management
               containerPort: {{ .Values.service.managementPort }}
+          env:
+            # Migrations run only in the pre-install/pre-upgrade Job as the
+            # schema owner; the pods hold the runtime role and never migrate.
+            - name: SPRING_FLYWAY_ENABLED
+              value: "false"
           envFrom:
             - configMapRef:
                 name: {{ include "mandates.name" . }}

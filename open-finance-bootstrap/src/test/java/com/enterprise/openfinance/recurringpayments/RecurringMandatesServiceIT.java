@@ -143,11 +143,13 @@ class RecurringMandatesServiceIT {
 
     @BeforeEach
     void cleanTables() {
-        jdbc.update("delete from " + SCHEMA + ".dpop_proof_jti");
-        jdbc.update("delete from " + SCHEMA + ".mandate_outbox_event");
-        jdbc.update("delete from " + SCHEMA + ".mandate_idempotency_record");
-        jdbc.update("delete from " + SCHEMA + ".mandate_payment");
-        jdbc.update("delete from " + SCHEMA + ".mandate_record");
+        // As the schema owner: the runtime role may not delete mandates or payments.
+        JdbcTemplate owner = PostgresTestDatabase.owner();
+        owner.update("delete from " + SCHEMA + ".dpop_proof_jti");
+        owner.update("delete from " + SCHEMA + ".mandate_outbox_event");
+        owner.update("delete from " + SCHEMA + ".mandate_idempotency_record");
+        owner.update("delete from " + SCHEMA + ".mandate_payment");
+        owner.update("delete from " + SCHEMA + ".mandate_record");
     }
 
     @Test
@@ -159,6 +161,39 @@ class RecurringMandatesServiceIT {
                 """, String.class);
 
         assertThat(tables).containsExactly("dpop_proof_jti", "mandate_idempotency_record", "mandate_outbox_event", "mandate_payment", "mandate_record");
+    }
+
+    /**
+     * The service connects as a runtime role with DML only: it cannot run DDL
+     * (it owns neither the schema nor the tables), cannot delete or rewrite
+     * mandates and accepted payments beyond what the code does, and cannot
+     * read Flyway's history.
+     */
+    @Test
+    void theRuntimeRoleCannotRunDdlOrDeleteMandatesAndPayments() {
+        assertThat(jdbc.queryForObject("select current_user", String.class)).isEqualTo(PostgresTestDatabase.RUNTIME_ROLE);
+        JdbcTemplate runtime = PostgresTestDatabase.runtime();
+
+        assertThatThrownBy(() -> runtime.execute("create table " + SCHEMA + ".shadow (id int)"))
+                .rootCause().hasMessageContaining("permission denied for schema " + SCHEMA);
+        assertThatThrownBy(() -> runtime.execute("alter table " + SCHEMA + ".mandate_record add column shadow int"))
+                .rootCause().hasMessageContaining("must be owner of").hasMessageContaining("mandate_record");
+        assertThatThrownBy(() -> runtime.execute("drop table " + SCHEMA + ".mandate_outbox_event"))
+                .rootCause().hasMessageContaining("must be owner of").hasMessageContaining("mandate_outbox_event");
+        assertThatThrownBy(() -> runtime.execute("create index ix_shadow on " + SCHEMA + ".mandate_payment (amount)"))
+                .rootCause().hasMessageContaining("must be owner of").hasMessageContaining("mandate_payment");
+        assertThatThrownBy(() -> runtime.execute("truncate " + SCHEMA + ".mandate_record"))
+                .rootCause().hasMessageContaining("permission denied for table mandate_record");
+        assertThatThrownBy(() -> runtime.update("delete from " + SCHEMA + ".mandate_record"))
+                .rootCause().hasMessageContaining("permission denied for table mandate_record");
+        assertThatThrownBy(() -> runtime.update("delete from " + SCHEMA + ".mandate_payment"))
+                .rootCause().hasMessageContaining("permission denied for table mandate_payment");
+        assertThatThrownBy(() -> runtime.update("update " + SCHEMA + ".mandate_payment set amount = 0"))
+                .rootCause().hasMessageContaining("permission denied for table mandate_payment");
+        assertThatThrownBy(() -> runtime.queryForObject("select count(*) from " + SCHEMA + ".flyway_schema_history", Integer.class))
+                .rootCause().hasMessageContaining("permission denied for table flyway_schema_history");
+
+        assertThat(runtime.queryForObject("select count(*) from " + SCHEMA + ".mandate_record", Integer.class)).isZero();
     }
 
     @Test
@@ -346,7 +381,7 @@ class RecurringMandatesServiceIT {
         Mockito.verify(kafka, Mockito.times(25)).send(any(ProducerRecord.class)); // the batch stops at the stuck row
 
         // The same row has now been failing since 25 h ago: the next retryable failure parks it.
-        jdbc.update("update " + SCHEMA + ".mandate_outbox_event set first_failed_at = now() - interval '25 hours'"
+        PostgresTestDatabase.owner().update("update " + SCHEMA + ".mandate_outbox_event set first_failed_at = now() - interval '25 hours'"
                 + " where first_failed_at is not null");
         assertThat(relay.relayOnce()).isZero();
         assertThat(outbox.countParked()).isEqualTo(1);

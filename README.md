@@ -11,7 +11,7 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | `spring.application.name` / app label | `app.pay.recurring-mandates` / `fintechbankx.io/app: app-pay-recurring-mandates` |
 | Package root | `com.enterprise.openfinance.recurringpayments` (`domain`, `domain.port.in`, `domain.port.out`, `application`, `infrastructure.<tech>`) |
 | Modules | `open-finance-domain`, `open-finance-application`, `open-finance-infrastructure`, `open-finance-bootstrap` (Spring Boot app) |
-| Data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` (Flyway V1 to V4) |
+| Data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` (Flyway V1 to V5). Two roles: schema owner (Flyway, Helm hook Job, secret `db-migration`) and a DML-only runtime role for the pods (secret `db-app`) |
 | API | [OpenAPI](api/openapi/recurring-mandates-service.yaml), base `/open-finance/v1/vrp` |
 | Events | [AsyncAPI](api/asyncapi/svc-pay-recurring-mandates.yaml) |
 | Ports | 8080 `http`, 8081 `http-management` (actuator, Prometheus) |
@@ -36,7 +36,7 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 |---|---|
 | Full gate (unit, ArchUnit, Jacoco 85 % line, integration) | `./gradlew --no-daemon clean check` |
 | Integration tests against PostgreSQL | set `TEST_DB_URL`, `TEST_DB_USERNAME`, `TEST_DB_PASSWORD`; without them they skip locally and fail when `CI=true` |
-| Run locally without Kafka | `DB_URL=jdbc:postgresql://localhost:5432/<db> DB_USERNAME=<user> SPRING_DATASOURCE_PASSWORD=<password> ACCOUNTS_ADAPTER=in-memory OUTBOX_RELAY_ENABLED=false java -jar open-finance-bootstrap/build/libs/payment-recurring-mandates-service.jar` |
+| Run locally without Kafka | `DB_URL=jdbc:postgresql://localhost:5432/<db> DB_USERNAME=<user> SPRING_DATASOURCE_PASSWORD=<password> ACCOUNTS_ADAPTER=in-memory CONSENT_ADAPTER=in-memory OUTBOX_RELAY_ENABLED=false java -jar open-finance-bootstrap/build/libs/payment-recurring-mandates-service.jar` (single-user: Flyway runs in-process as that user and V5 only logs that privileges are not separated) |
 | Container | [Dockerfile](Dockerfile) |
 | Kubernetes | [Helm chart](deploy/helm/payment-recurring-mandates-service) |
 | AWS | [Terraform](deploy/terraform) |

@@ -18,6 +18,11 @@ output "app_db_secret_name" {
   value       = aws_secretsmanager_secret.app_database.name
 }
 
+output "migration_db_secret_name" {
+  description = "Helm value migration.remoteSecretName (schema owner, Flyway Job only)."
+  value       = aws_secretsmanager_secret.migration_database.name
+}
+
 output "master_user_secret_arn" {
   description = "RDS-managed admin credential, for the DBA bootstrap only."
   value       = aws_rds_cluster.database.master_user_secret[0].secret_arn

@@ -39,7 +39,7 @@ Consequences:
 
 | Step | Action | Rollback |
 |---|---|---|
-| 1 | DBA bootstrap: create role `pay_recurring_mandates_app` owning schema `sc_pay_recurring_mandates`, write its credential to the Terraform secret `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`). Deploy with `OUTBOX_RELAY_ENABLED=false`. | uninstall the chart; drop the schema |
+| 1 | DBA bootstrap (section "Database roles" below): create the schema owner `pay_recurring_mandates_owner` and the runtime role `pay_recurring_mandates_app`, write their credentials to `<env>/payment-recurring-mandates-service/db-migration` and `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`), `migration.remoteSecretName` to `migration_db_secret_name`. Deploy with `OUTBOX_RELAY_ENABLED=false`; the pre-install hook Job runs Flyway as the owner (V1 to V5) before the pods start. | uninstall the chart; drop the schema |
 | 2 | Mesh repository adds the ALLOW rule for the ingress gateway principal `cluster.local/ns/istio-ingress/sa/istio-ingressgateway` on `payment-recurring-mandates-service` (no internal callers today). | remove the rule |
 | 3 | Route `/open-finance/v1/vrp/**` at the ingress gateway from the monolith to this service; announce to TPPs that mandates must be re-created. | route back to the monolith (its in-memory state was empty after any restart, so nothing is lost either way) |
 | 4 | Once `evt.pay.mandate.*.v1` exist in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 1 are relayed in order. | relay off; events stay in the outbox |
@@ -49,10 +49,35 @@ Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
 `/open-finance/v1/vrp/**` above 1 %; p99 latency above 1 s; `outbox_parked_events`
 above 0; 401 rate with `invalid_dpop_proof` above 5 % of VRP calls (TPPs not DPoP-ready); `outbox_oldest_pending_age_seconds` above 300 with the relay enabled.
 
+### Database roles
+
+| Role | Secret | Used by | Rights |
+|---|---|---|---|
+| `pay_recurring_mandates_owner` | `<env>/payment-recurring-mandates-service/db-migration` | Helm pre-install/pre-upgrade Job `payment-recurring-mandates-service-db-migration` (image with `migrate`), deleted with its ExternalSecret when it succeeds | owns `sc_pay_recurring_mandates` and every table (DDL) |
+| `pay_recurring_mandates_app` (`DB_USERNAME`) | `<env>/payment-recurring-mandates-service/db-app` | the service pods (`SPRING_FLYWAY_ENABLED=false`) | USAGE on the schema; `mandate_record` SELECT/INSERT/UPDATE; `mandate_payment` SELECT/INSERT; `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` SELECT/INSERT/UPDATE/DELETE; USAGE on the outbox `created_seq` sequence (V5). No DDL, no TRUNCATE, no Flyway history |
+
+DBA bootstrap, once per environment, as the RDS master user (`master_user_secret_arn`):
+
+```sql
+CREATE ROLE pay_recurring_mandates_owner LOGIN PASSWORD '<from a password generator>';
+CREATE ROLE pay_recurring_mandates_app LOGIN PASSWORD '<from a password generator>';
+GRANT CONNECT ON DATABASE db_pay_recurring_mandates_<env> TO pay_recurring_mandates_owner, pay_recurring_mandates_app;
+GRANT CREATE ON DATABASE db_pay_recurring_mandates_<env> TO pay_recurring_mandates_owner;  -- Flyway creates the schema
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+```
+
+Then put `{"username","password"}` of each role into its secret
+(`aws secretsmanager put-secret-value`). Flyway creates `sc_pay_recurring_mandates` as
+the owner and V5 grants the runtime role; a later migration that adds a table must grant
+it explicitly. Pending on the platform side, not worked around here: microservice-base
+(terraform-modules, ref=main) still names its runtime secret `<env>-<slug>/runtime`
+and uses `timestamp()` in tags; Platform fixes both in terraform-modules #11.
+
 ## 3. Acceptance checklist
 
 - [x] Service builds and tests standalone (`./gradlew check`, including PostgreSQL integration tests with `TEST_DB_URL`)
 - [x] Own schema and migrations; Hibernate validates entities at startup
+- [x] Flyway as the schema owner in a Helm hook Job; pods run as a DML-only role (IT proves the runtime role cannot run DDL)
 - [x] Events written through a transactional outbox, relayed in order with one active relay; permanent failures parked at once, retryable failures parked only after 24 h of continuous failure
 - [x] Idempotent collections (`x-idempotency-key`, unique per TPP in the database, race-tested)
 - [x] Monthly limit enforced under concurrency (advisory lock per mandate plus version compare-and-set)

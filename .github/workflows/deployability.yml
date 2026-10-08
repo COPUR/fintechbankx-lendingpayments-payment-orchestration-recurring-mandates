@@ -41,6 +41,7 @@ jobs:
             --set image.repository=ci/payment-recurring-mandates-service --set image.tag=${{ github.sha }} \
             --set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
             --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client \
+            --set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration \
             --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem \
             --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
             --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
@@ -55,6 +56,17 @@ jobs:
           grep -q "mountPath: /etc/ssl/rds" <<<"$(helm template ci "$chart" $args)"
           if helm template ci "$chart" $args --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db?sslmode=require > /dev/null 2>&1; then
             echo "chart rendered a DB_URL without sslmode=verify-full and the RDS CA bundle" >&2; exit 1
+          fi
+          # Flyway runs only in the hook Job, as the schema owner; the pods never get that secret.
+          job="$(helm template ci "$chart" $args --show-only templates/migration-job.yaml)"
+          grep -q 'helm.sh/hook: pre-install,pre-upgrade' <<<"$job"
+          grep -q 'args: \["migrate"\]' <<<"$job"
+          grep -q 'key: dev/payment-recurring-mandates-service/db-migration' <<<"$job"
+          deployment="$(helm template ci "$chart" $args --show-only templates/deployment.yaml)"
+          grep -A1 'name: SPRING_FLYWAY_ENABLED' <<<"$deployment" | grep -q 'value: "false"'
+          if grep -q 'db-migration' <<<"$deployment"; then echo "the service pods reference the migration secret" >&2; exit 1; fi
+          if helm template ci "$chart" $args --set migration.remoteSecretName= > /dev/null 2>&1; then
+            echo "chart rendered without the migration secret" >&2; exit 1
           fi
           # Platform admission policy: every ExternalSecret carries
           # app.kubernetes.io/name=<service account> and reads only <env>/<service account>/.

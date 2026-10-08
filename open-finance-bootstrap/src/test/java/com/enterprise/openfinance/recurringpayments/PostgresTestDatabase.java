@@ -1,6 +1,8 @@
 package com.enterprise.openfinance.recurringpayments;
 
 import org.junit.jupiter.api.Assumptions;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -11,10 +13,22 @@ import org.testcontainers.containers.PostgreSQLContainer;
  * required-gates.yml) and the tests FAIL there if it is missing (CI=true).
  * Locally set TEST_DB_URL or run Docker for Testcontainers; with neither the
  * tests are skipped.
+ *
+ * Runs the service with the two roles of production: Flyway as the schema
+ * owner (the database's test user, through DB_MIGRATION_USERNAME / _PASSWORD;
+ * in-process here, a Helm hook Job when deployed) and the application as a
+ * separate runtime role (DB_USERNAME) that has only the grants of V5. The
+ * owner needs CREATEROLE to create that role.
  */
 final class PostgresTestDatabase {
 
+    static final String RUNTIME_ROLE = "mandates_runtime_it";
+    static final String RUNTIME_PASSWORD = "mandates_runtime_it";
+
     private static PostgreSQLContainer<?> container;
+    private static String url;
+    private static String ownerUser;
+    private static String ownerPassword;
 
     private PostgresTestDatabase() {
     }
@@ -39,27 +53,74 @@ final class PostgresTestDatabase {
     }
 
     private static boolean hasExternalDatabase() {
-        String url = System.getenv("TEST_DB_URL");
-        return url != null && !url.isBlank();
+        String value = System.getenv("TEST_DB_URL");
+        return value != null && !value.isBlank();
     }
 
     static synchronized void register(DynamicPropertyRegistry registry) {
-        if (hasExternalDatabase()) {
-            registry.add("spring.datasource.url", () -> System.getenv("TEST_DB_URL"));
-            registry.add("spring.datasource.username", () -> env("TEST_DB_USERNAME", "mandates_test"));
-            registry.add("spring.datasource.password", () -> env("TEST_DB_PASSWORD", "mandates_test"));
+        start();
+        registry.add("spring.datasource.url", () -> url);
+        // Runtime role: what the pods connect as.
+        registry.add("DB_USERNAME", () -> RUNTIME_ROLE);
+        registry.add("spring.datasource.password", () -> RUNTIME_PASSWORD);
+        // Schema owner: what Flyway connects as.
+        registry.add("DB_MIGRATION_USERNAME", () -> ownerUser);
+        registry.add("DB_MIGRATION_PASSWORD", () -> ownerPassword);
+    }
+
+    static synchronized String url() {
+        start();
+        return url;
+    }
+
+    static synchronized String ownerUser() {
+        start();
+        return ownerUser;
+    }
+
+    static synchronized String ownerPassword() {
+        start();
+        return ownerPassword;
+    }
+
+    /** The schema owner's connection, for test set-up the runtime role may not do. */
+    static synchronized JdbcTemplate owner() {
+        start();
+        return new JdbcTemplate(new DriverManagerDataSource(url, ownerUser, ownerPassword));
+    }
+
+    /** A plain connection as the runtime role, outside the application. */
+    static synchronized JdbcTemplate runtime() {
+        start();
+        return new JdbcTemplate(new DriverManagerDataSource(url, RUNTIME_ROLE, RUNTIME_PASSWORD));
+    }
+
+    private static void start() {
+        if (url != null) {
             return;
         }
-        if (container == null) {
+        if (hasExternalDatabase()) {
+            url = System.getenv("TEST_DB_URL");
+            ownerUser = env("TEST_DB_USERNAME", "mandates_test");
+            ownerPassword = env("TEST_DB_PASSWORD", "mandates_test");
+        } else {
             container = new PostgreSQLContainer<>("postgres:16-alpine")
                     .withDatabaseName("db_pay_recurring_mandates_test")
                     .withUsername("mandates_test")
                     .withPassword("mandates_test");
             container.start();
+            url = container.getJdbcUrl();
+            ownerUser = container.getUsername();
+            ownerPassword = container.getPassword();
         }
-        registry.add("spring.datasource.url", container::getJdbcUrl);
-        registry.add("spring.datasource.username", container::getUsername);
-        registry.add("spring.datasource.password", container::getPassword);
+        new JdbcTemplate(new DriverManagerDataSource(url, ownerUser, ownerPassword)).execute("""
+                do $$
+                begin
+                    if not exists (select 1 from pg_roles where rolname = '%1$s') then
+                        create role %1$s login password '%2$s';
+                    end if;
+                end $$
+                """.formatted(RUNTIME_ROLE, RUNTIME_PASSWORD));
     }
 
     private static String env(String name, String fallback) {

@@ -50,3 +50,7 @@ app.kubernetes.io/name = the service account name.
 {{- end -}}
 {{ include "mandates.labels" . }}
 {{- end -}}
+
+{{- define "mandates.migrationName" -}}
+{{ include "mandates.name" . }}-db-migration
+{{- end -}}
