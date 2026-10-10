@@ -90,6 +90,52 @@ EventHeaders:
       type: string
       description: W3C trace context.
 
+DeadLetterHeaders:
+  type: object
+  description: >-
+    Headers added by the consumer that moves a poison message to the
+    DLQ in the consumer's own namespace (consumer-owned DLQ, ADR-019) after
+    bounded retries. The original record value and key are
+    copied unchanged.
+  required:
+    - eventType
+    - eventId
+    - dlq-original-topic
+    - dlq-consumer-group
+    - dlq-attempts
+    - dlq-failed-at
+  properties:
+    eventType:
+      type: string
+    eventId:
+      type: string
+      format: uuid
+    correlationId:
+      type: string
+    dlq-original-topic:
+      type: string
+    dlq-original-partition:
+      type: string
+      pattern: '^[0-9]+$'
+      description: Decimal text. Kafka header values are bytes; every dead-letter header is UTF-8 text.
+    dlq-original-offset:
+      type: string
+      pattern: '^[0-9]+$'
+      description: Decimal text.
+    dlq-consumer-group:
+      type: string
+      description: 'Consumer group that gave up, cg.<service-id>.<purpose>.v<major>.'
+    dlq-attempts:
+      type: string
+      pattern: '^[1-9][0-9]*$'
+      description: Decimal text, at least 1.
+    dlq-error-class:
+      type: string
+      description: Exception class or error code. Never the message text if it can contain personal data.
+    dlq-failed-at:
+      type: string
+      format: date-time
+
 MonetaryAmount:
   type: object
   description: Money value. Amount is a decimal string to avoid binary floating point rounding.

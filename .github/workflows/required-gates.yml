@@ -135,8 +135,8 @@ jobs:
             npx -y @asyncapi/cli@2.13.0 validate "$spec"
           done
 
-      # The gate scripts are copies of the AsyncAPI catalog's at commit 44837cc (README,
-      # "Event contract gate"); an edited copy fails here. Re-copy and update both lists together.
+      # The gate scripts and the common envelope are copies of the AsyncAPI catalog's at commit
+      # 44837cc (README, "Event contract gate"); an edited copy fails here. Re-copy and update both lists together.
       - name: AsyncAPI gate scripts match the catalog copy
         if: ${{ hashFiles('api/asyncapi/*.yaml') != '' }}
         run: |
@@ -144,6 +144,7 @@ jobs:
           de255737fe6b54ffbadce8e030e18eec48d0137e0abd43c790fe201a10015eb1  scripts/ci/asyncapi-breaking.mjs
           5b39d588673c5f7ab55fcfa548fffd70b96ab9b11ea82bd2b61468dadb430c77  scripts/ci/asyncapi-breaking.sh
           212df6ca092e1ed5519664d7848c9de5fdb5d137f34faa3d31a25e3fe29b3847  scripts/ci/lib/asyncapi-model.mjs
+          299e8731ccd365d8b1bccb698c3ae0e48812e1d2da85ed435680fcc7c61867ed  api/asyncapi/common/event-envelope.yaml
           SUMS
 
       - name: AsyncAPI breaking-change check
