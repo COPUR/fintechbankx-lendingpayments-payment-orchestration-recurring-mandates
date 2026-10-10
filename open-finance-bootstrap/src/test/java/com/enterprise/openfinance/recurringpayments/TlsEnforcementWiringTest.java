@@ -1,15 +1,20 @@
 package com.enterprise.openfinance.recurringpayments;
 
+import com.enterprise.openfinance.recurringpayments.infrastructure.config.TlsEnforcementInitializer;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.boot.Banner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.env.PropertiesPropertySourceLoader;
 import org.springframework.boot.env.YamlPropertySourceLoader;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.MutablePropertySources;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.kafka.core.KafkaTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -37,8 +42,46 @@ class TlsEnforcementWiringTest {
     }
 
     @Test
-    void theMskProfileSatisfiesTheKafkaAssertion() throws Exception {
+    void bothKafkaProfilesSatisfyTheKafkaAssertion() throws Exception {
+        // MSK: SASL_SSL with IAM. Strimzi: SSL, mutual TLS with the KafkaUser certificate.
         assertThat(yaml("application-kafka-msk.yml").getProperty("spring.kafka.security.protocol")).isEqualTo("SASL_SSL");
+        assertThat(yaml("application-kafka-strimzi.yml").getProperty("spring.kafka.security.protocol")).isEqualTo("SSL");
+        for (String profile : new String[] {"application-kafka-msk.yml", "application-kafka-strimzi.yml"}) {
+            serviceConfiguration(profile).run(context -> assertThat(context).as(profile).hasNotFailed());
+        }
+        // The runtime-neutral default (no profile) is PLAINTEXT and is refused.
+        serviceConfiguration(null).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure())).hasMessageContaining("found PLAINTEXT");
+        });
+    }
+
+    /**
+     * The service's own configuration (application.yml, optionally one Kafka profile
+     * overlay on top), a configured Kafka client and enforcement on, run through the
+     * initializer only; no broker or database is touched.
+     */
+    private static ApplicationContextRunner serviceConfiguration(String profileFile) {
+        return new ApplicationContextRunner()
+                .withInitializer(context -> {
+                    MutablePropertySources sources = context.getEnvironment().getPropertySources();
+                    PropertySource<?> base = yamlUnchecked("application.yml");
+                    sources.addLast(base);
+                    if (profileFile != null) {
+                        sources.addBefore(base.getName(), yamlUnchecked(profileFile));
+                    }
+                })
+                .withInitializer(new TlsEnforcementInitializer())
+                .withBean(KafkaTemplate.class, () -> Mockito.mock(KafkaTemplate.class))
+                .withPropertyValues("fintechbankx.tls.enforce=true", VERIFY_FULL.substring(2));
+    }
+
+    private static PropertySource<?> yamlUnchecked(String file) {
+        try {
+            return yaml(file);
+        } catch (Exception e) {
+            throw new IllegalStateException(file, e);
+        }
     }
 
     @Test

@@ -79,12 +79,33 @@ class TlsEnforcementInitializerTest {
 
     @Test
     void theProducerOverrideWinsOverTheCommonProtocol() {
+        // Strimzi mutual TLS on the producer override passes even when the common setting is plain.
         withKafkaClient().withPropertyValues(VERIFY_FULL,
-                "spring.kafka.security.protocol=SASL_SSL", "spring.kafka.producer.security.protocol=SSL").run(context -> {
+                "spring.kafka.security.protocol=PLAINTEXT", "spring.kafka.producer.security.protocol=SSL")
+                .run(context -> assertThat(context).hasNotFailed());
+        // And a plain producer override is refused even when the common setting is SASL_SSL.
+        withKafkaClient().withPropertyValues(VERIFY_FULL,
+                "spring.kafka.security.protocol=SASL_SSL", "spring.kafka.producer.security.protocol=PLAINTEXT").run(context -> {
             assertThat(context).hasFailed();
             assertThat(rootCause(context.getStartupFailure()))
                     .hasMessageContaining("spring.kafka.producer.security.protocol")
-                    .hasMessageContaining("found SSL");
+                    .hasMessageContaining("found PLAINTEXT");
+        });
+    }
+
+    @Test
+    void acceptsStrimziMutualTlsAsWellAsSaslSsl() {
+        withKafkaClient().withPropertyValues(VERIFY_FULL, "spring.kafka.security.protocol=SSL")
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void refusesSaslWithoutTls() {
+        withKafkaClient().withPropertyValues(VERIFY_FULL, "spring.kafka.security.protocol=SASL_PLAINTEXT").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .hasMessageContaining("SASL_SSL or SSL")
+                    .hasMessageContaining("found SASL_PLAINTEXT");
         });
     }
 

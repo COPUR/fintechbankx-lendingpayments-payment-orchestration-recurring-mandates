@@ -21,7 +21,10 @@ import java.util.List;
  *   Aurora's certificate against the mounted RDS CA bundle), and</li>
  *   <li>when a Kafka client is configured (a producer or consumer factory bean
  *   exists, which the migration Job never has), its effective
- *   {@code security.protocol} is {@code SASL_SSL}.</li>
+ *   {@code security.protocol} encrypts in transit: {@code SASL_SSL} (MSK with
+ *   IAM) or {@code SSL} (Strimzi mutual TLS with the KafkaUser certificate).
+ *   {@code PLAINTEXT}, {@code SASL_PLAINTEXT} and unset (Kafka's default is
+ *   plain) are refused.</li>
  * </ul>
  * {@code fintechbankx.tls.enforce} is true unless it is explicitly
  * {@code false}, which only local and test configuration may set (the
@@ -38,7 +41,8 @@ public final class TlsEnforcementInitializer implements ApplicationContextInitia
     public static final String ENFORCE = "fintechbankx.tls.enforce";
     static final String DATASOURCE_URL = "spring.datasource.url";
     static final String REQUIRED_SSLMODE = "verify-full";
-    static final String REQUIRED_PROTOCOL = "SASL_SSL";
+    /** Protocols that encrypt in transit: SASL_SSL (MSK, IAM) and SSL (Strimzi mutual TLS). */
+    static final List<String> ACCEPTED_PROTOCOLS = List.of("SASL_SSL", "SSL");
     /** Kafka's default when no security.protocol is configured. */
     static final String KAFKA_DEFAULT_PROTOCOL = "PLAINTEXT";
 
@@ -103,9 +107,9 @@ public final class TlsEnforcementInitializer implements ApplicationContextInitia
                 break;
             }
         }
-        if (!REQUIRED_PROTOCOL.equals(protocol)) {
+        if (!ACCEPTED_PROTOCOLS.contains(protocol)) {
             throw new IllegalStateException(ENFORCE + ": the Kafka " + role + " is configured and " + source
-                    + " must be " + REQUIRED_PROTOCOL + " (found " + protocol + ")"
+                    + " must be " + String.join(" or ", ACCEPTED_PROTOCOLS) + " (found " + protocol + ")"
                     + "; only local or test configuration may set " + ENFORCE + "=false");
         }
     }
