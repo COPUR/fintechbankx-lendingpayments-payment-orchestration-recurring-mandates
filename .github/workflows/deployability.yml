@@ -108,6 +108,14 @@ jobs:
           grep -q "METRICS_TAG_APP: \"$sa\"" <<<"$rendered"
           python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates <<<"$rendered"
           helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates
+      # templates/_fbx-guard.tpl is the datasource guard of cicd-templates (commit 2caa48f,
+      # charts/fintechbankx-service/templates/_helpers.tpl lines 70-239) with a source header; an
+      # edited copy fails here. Re-copy and update the sum here and in the README together.
+      - name: Vendored guard matches cicd-templates 2caa48f
+        run: |
+          sha256sum -c --strict - <<'SUMS'
+          bf0c432718a8468400172758f664949fafb971e43be29f7e8ed695650539558d  deploy/helm/payment-recurring-mandates-service/templates/_fbx-guard.tpl
+          SUMS
       - name: Missing required config fails the render
         run: |
           if helm template ci deploy/helm/payment-recurring-mandates-service \
