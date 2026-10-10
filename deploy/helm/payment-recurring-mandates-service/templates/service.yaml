@@ -10,8 +10,8 @@ spec:
     {{- include "mandates.selectorLabels" . | nindent 4 }}
   ports:
     - name: http
-      port: {{ .Values.service.port }}
+      port: {{ .Values.service.port | int }}
       targetPort: http
     - name: http-management
-      port: {{ .Values.service.managementPort }}
+      port: {{ .Values.service.managementPort | int }}
       targetPort: management

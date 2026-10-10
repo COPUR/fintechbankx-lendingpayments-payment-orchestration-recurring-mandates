@@ -59,7 +59,7 @@ jobs:
           grep -q "name: rds-ca-bundle" <<<"$(helm template ci "$chart" $args)"
           # Platform chart convention (cicd-templates 4f0f266): bundle at /etc/fintechbankx/rds-ca, exported as DB_SSL_ROOT_CERT
           # to the pods and the migration Job.
-          grep -q "mountPath: /etc/fintechbankx/rds-ca" <<<"$(helm template ci "$chart" $args)"
+          grep -q 'mountPath: "/etc/fintechbankx/rds-ca"' <<<"$(helm template ci "$chart" $args)"
           test "$(grep -A1 'name: DB_SSL_ROOT_CERT' <<<"$(helm template ci "$chart" $args)" | grep -c 'value: "/etc/fintechbankx/rds-ca/global-bundle.pem"')" -eq 2
           if helm template ci "$chart" $args --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db > /dev/null 2>&1; then
             echo "chart rendered a DB_URL without sslmode" >&2; exit 1
@@ -74,7 +74,7 @@ jobs:
           job="$(helm template ci "$chart" $args --show-only templates/migration-job.yaml)"
           grep -q 'helm.sh/hook: pre-install,pre-upgrade' <<<"$job"
           grep -q 'args: \["migrate"\]' <<<"$job"
-          grep -q 'key: dev/payment-recurring-mandates-service/db-migration' <<<"$job"
+          grep -q 'key: "dev/payment-recurring-mandates-service/db-migration"' <<<"$job"
           deployment="$(helm template ci "$chart" $args --show-only templates/deployment.yaml)"
           grep -A1 'name: SPRING_FLYWAY_ENABLED' <<<"$deployment" | grep -q 'value: "false"'
           if grep -q 'db-migration' <<<"$deployment"; then echo "the service pods reference the migration secret" >&2; exit 1; fi
@@ -85,7 +85,8 @@ jobs:
           # app.kubernetes.io/name=<service account> and reads only <env>/<service account>/.
           rendered="$(helm template ci "$chart" $args)"
           sa=payment-recurring-mandates-service
-          keys="$(grep -E '^ +key: ' <<<"$rendered" | awk '{print $2}')"
+          # remoteRef keys are rendered quoted (every interpolated value is); compare them unquoted.
+          keys="$(grep -E '^ +key: ' <<<"$rendered" | awk '{print $2}' | tr -d '"')"
           test -n "$keys"
           if grep -vE "^(dev|staging|prod)/$sa/[a-z0-9-]+$" <<<"$keys"; then
             echo "ExternalSecret remoteRef key outside <env>/$sa/" >&2; exit 1
@@ -108,13 +109,13 @@ jobs:
           grep -q "METRICS_TAG_APP: \"$sa\"" <<<"$rendered"
           python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates <<<"$rendered"
           helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates
-      # templates/_fbx-guard.tpl is the datasource guard of cicd-templates (commit 2caa48f,
-      # charts/fintechbankx-service/templates/_helpers.tpl lines 70-239) with a source header; an
-      # edited copy fails here. Re-copy and update the sum here and in the README together.
-      - name: Vendored guard matches cicd-templates 2caa48f
+      # templates/_fbx_helpers.tpl is the platform's charts/fintechbankx-service/templates/_helpers.tpl
+      # at cicd-templates commit a4f0072, byte for byte (fbx.guard and the helpers it calls); an edited
+      # copy fails here. Re-copy and update the sum here and in the README together.
+      - name: Vendored guard matches cicd-templates a4f0072
         run: |
           sha256sum -c --strict - <<'SUMS'
-          bf0c432718a8468400172758f664949fafb971e43be29f7e8ed695650539558d  deploy/helm/payment-recurring-mandates-service/templates/_fbx-guard.tpl
+          1fd684735383301baf3052c5d8978dd86edee1ac1c66ebfb944a8a6a166f4c92  deploy/helm/payment-recurring-mandates-service/templates/_fbx_helpers.tpl
           SUMS
       - name: Missing required config fails the render
         run: |
@@ -124,16 +125,16 @@ jobs:
             echo "chart rendered without DB_URL / Kafka / OIDC / accounts settings"; exit 1
           fi
       # Governance round 3 (2b) and round 6 (guardrail 4a): no values override can move the
-      # service off the checked JDBC URL or switch its TLS assertion off. The name guard
-      # (templates/_helpers.tpl, mandates.refusedEnvName; the regexes of cicd-templates 2caa48f
-      # fbx.datasourceOverrideName, extended) normalises each `config` key and `extraEnv` name the
-      # way Spring's relaxed binding does (upper case, '.' and '-' read as '_') and refuses Spring
-      # datasource/Flyway/Liquibase/R2DBC properties, spring.application.json, jdbc_url, sslfactory,
-      # sslhostnameverifier, spring.config.{import,location,additional-location,name} (indexed and
-      # suffixed forms included), spring.profiles.{active,include,default,group}, fintechbankx.tls.*
-      # and spring.kafka.*security.protocol / spring.kafka.properties.*. The only configtree the
-      # platform allows is one the chart itself renders on optional:configtree:/etc/fintechbankx/config/;
-      # this chart renders none. The Kafka profile is the validated value kafka.profile.
+      # service off the checked JDBC URL or switch its TLS assertion off. The vendored platform
+      # guard (templates/_fbx_helpers.tpl, fbx.guard, called through the adapter in
+      # templates/_helpers.tpl mandates.guard) checks each `config` key and `extraEnv` name as given
+      # and in its relaxed-binding canonical form and refuses Spring datasource/Flyway/Liquibase/R2DBC
+      # properties, spring.application.json, jdbc_url, sslfactory, sslhostnameverifier,
+      # sslpasswordcallback, sslmode/sslrootcert names, spring.config.*, spring.profiles.*,
+      # spring.ssl.*, *ssl.bundle* and fintechbankx.tls.*; this chart adds spring.kafka.*security.protocol
+      # and spring.kafka.properties.* by name. The only configtree the platform allows is one the chart
+      # itself renders on optional:configtree:/etc/fintechbankx/config/; this chart renders none. The
+      # Kafka profile is the validated value kafka.profile (fbx.kafkaProfile through kafka.runtime).
       - name: Spring config redirection fails the render
         run: |
           chart=deploy/helm/payment-recurring-mandates-service
@@ -188,13 +189,22 @@ jobs:
           if helm template ci "$chart" $args --set-string 'config.SPRING_PROFILES_ACTIVE=kafka-msk\,local' > /dev/null 2>&1; then
             echo "chart rendered the local profile" >&2; exit 1
           fi
-          # KAFKA_SECURITY_PROTOCOL feeds spring.kafka.security.protocol; only the TLS protocols may be named.
-          for protocol in PLAINTEXT SASL_PLAINTEXT ''; do
+          # KAFKA_SECURITY_PROTOCOL is rendered from kafka.profile (SASL_SSL with kafka-msk, SSL with
+          # kafka-strimzi); a config value may only repeat the protocol of the profile (fbx.validateKafkaTls).
+          grep -q 'KAFKA_SECURITY_PROTOCOL: "SASL_SSL"' <<<"$(helm template ci "$chart" $args)"
+          grep -q 'KAFKA_SECURITY_PROTOCOL: "SSL"' <<<"$(helm template ci "$chart" $args --set kafka.profile=kafka-strimzi)"
+          for protocol in PLAINTEXT SASL_PLAINTEXT '' SSL; do
             if helm template ci "$chart" $args --set-string "config.KAFKA_SECURITY_PROTOCOL=$protocol" > /dev/null 2>&1; then
-              echo "chart rendered KAFKA_SECURITY_PROTOCOL=$protocol" >&2; exit 1
+              echo "chart rendered KAFKA_SECURITY_PROTOCOL=$protocol with kafka-msk" >&2; exit 1
             fi
           done
-          helm template ci "$chart" $args --set-string config.KAFKA_SECURITY_PROTOCOL=SSL > /dev/null
+          if helm template ci "$chart" $args --set kafka.profile=kafka-strimzi --set-string config.KAFKA_SECURITY_PROTOCOL=SASL_SSL > /dev/null 2>&1; then
+            echo "chart rendered KAFKA_SECURITY_PROTOCOL=SASL_SSL with kafka-strimzi" >&2; exit 1
+          fi
+          helm template ci "$chart" $args --set kafka.profile=kafka-strimzi --set-string config.KAFKA_SECURITY_PROTOCOL=SSL > /dev/null
+          if helm template ci "$chart" $args --set-string 'extraEnv[0].name=KAFKA_SSL_ENDPOINT_IDENTIFICATION_ALGORITHM' --set-string 'extraEnv[0].value=' > /dev/null 2>&1; then
+            echo "chart rendered an empty endpoint identification algorithm" >&2; exit 1
+          fi
           # The chart itself renders no SPRING_CONFIG_* setting; a harmless extraEnv entry still reaches the API pods.
           if grep -qi 'SPRING_CONFIG' <<<"$(helm template ci "$chart" $args)"; then
             echo "the chart renders a SPRING_CONFIG_* setting" >&2; exit 1
@@ -325,6 +335,81 @@ jobs:
                      "$base?sslmode=verify-full&sslrootcert=$ca&ApplicationName=mandates&reWriteBatchedInserts=true"; do
             helm template ci "$chart" $args --set-string "config.DB_URL=$url" > /dev/null
           done
+
+      # What the a4f0072 guard covers beyond 2caa48f: SSL bundle names, DB_SSL_ROOT_CERT (rendered by the
+      # chart; an extraEnv of that name would replace it), -Djdk.tls.* and -Djava.security.properties,
+      # '$(' in an extraEnv value (Kubernetes expands it after the check), '${' in a JDBC URL, envFrom
+      # and dataFrom values (keys the guard never sees), and key shapes. The templates quote every key
+      # and value they interpolate, so a newline in a value cannot add a key either.
+      - name: SSL bundles, DB_SSL_ROOT_CERT, JVM TLS properties, variable references and key injection fail the render
+        run: |
+          chart=deploy/helm/payment-recurring-mandates-service
+          args="--namespace payments \
+            --set image.repository=ci/payment-recurring-mandates-service --set image.tag=${{ github.sha }} \
+            --set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
+            --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client \
+            --set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration \
+            --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem \
+            --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
+            --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
+            --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
+            --set config.OIDC_TOKEN_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/token \
+            --set config.ACCOUNTS_SERVICE_BASE_URL=http://accounts.ci:8080"
+          ca=/etc/fintechbankx/rds-ca/global-bundle.pem
+          for key in SPRING_SSL_BUNDLE_PEM_RDS_TRUSTSTORE_CERTIFICATE 'spring\.ssl\.bundle\.jks\.x\.truststore\.location' SPRING_KAFKA_SSL_BUNDLE \
+                     SPRING_DATA_MONGODB_SSL_BUNDLE 'spring\.kafka\.ssl\.bundle' spring-ssl-bundle-pem-x DB_SSL_ROOT_CERT db-ssl-root-cert PGSSLROOTCERT \
+                     OPF_DB_SSL_MODE 'spring\.pro-files\.active' 'spring_config_activate_on-profile' 'SPRING_KAFKA_PROPERTIES_SASL_JAAS_CONFIG'; do
+            if helm template ci "$chart" $args --set-string "config.$key=x" > /dev/null 2>&1; then
+              echo "chart rendered config.$key" >&2; exit 1
+            fi
+            if helm template ci "$chart" $args --set-string "extraEnv[0].name=$key" --set-string 'extraEnv[0].value=x' > /dev/null 2>&1; then
+              echo "chart rendered extraEnv $key" >&2; exit 1
+            fi
+          done
+          for value in '-Djdk.tls.client.protocols=TLSv1' '-Djdk.tls.trustNameService=true' '-Djava.security.properties=/tmp/java.security' \
+                       '-Djdk.internal.httpclient.disableHostnameVerification=true' '-Dspring.ssl.bundle.pem.x.truststore.certificate=/tmp/x' \
+                       '-XX:MaxRAMPercentage=70 $(JAVA_EXTRA)' '-XX:MaxRAMPercentage=${PCT}' '"@/tmp/opts"'; do
+            if helm template ci "$chart" $args --set-string 'extraEnv[0].name=JAVA_TOOL_OPTIONS' --set-string "extraEnv[0].value=$value" > /dev/null 2>&1; then
+              echo "chart rendered JAVA_TOOL_OPTIONS=$value" >&2; exit 1
+            fi
+          done
+          # $(VAR) in any extraEnv value: Kubernetes would expand it from earlier env entries and envFrom keys.
+          if helm template ci "$chart" $args --set-string 'extraEnv[0].name=REPORT_URL' --set-string 'extraEnv[0].value=$(DB_URL)&sslmode=disable' > /dev/null 2>&1; then
+            echo "chart rendered an extraEnv value with \$(" >&2; exit 1
+          fi
+          # ${...} in the JDBC URL: Spring resolves it after the check.
+          for url in "jdbc:postgresql://db.ci:5432/db?sslmode=verify-full&sslrootcert=$ca\${EXTRA}" 'jdbc:postgresql://${DB_HOST}:5432/db?sslmode=verify-full&sslrootcert='"$ca"; do
+            if helm template ci "$chart" $args --set-string "config.DB_URL=$url" > /dev/null 2>&1; then
+              echo "chart rendered config.DB_URL=$url" >&2; exit 1
+            fi
+          done
+          # envFrom-like values and an ExternalSecret dataFrom load keys the guard never sees; the chart renders none of them.
+          for setting in 'envFrom[0].configMapRef.name=other' 'extraEnvFrom[0].secretRef.name=other' 'externalSecret.dataFrom[0].extract.key=dev/payment-recurring-mandates-service/all'; do
+            if helm template ci "$chart" $args --set-string "$setting" > /dev/null 2>&1; then
+              echo "chart rendered with $setting" >&2; exit 1
+            fi
+          done
+          # Template interpolation: a config key carrying a newline must not become a second key.
+          tmp="$(mktemp -d)"
+          printf 'config:\n  "HARMLESS\\nSPRING_CONFIG_IMPORT": "optional:configtree:/etc/fintechbankx/config/"\n' > "$tmp/key.yaml"
+          if helm template ci "$chart" $args -f "$tmp/key.yaml" > "$tmp/key.out" 2>&1; then
+            echo "chart rendered a config key containing a newline" >&2; exit 1
+          fi
+          grep -q 'is not a ConfigMap key' "$tmp/key.out"
+          # A value carrying a newline stays one quoted value: no extra ConfigMap key appears.
+          printf 'config:\n  HARMLESS: "x\\nSPRING_CONFIG_IMPORT: optional:configtree:/etc/fintechbankx/config/"\n' > "$tmp/value.yaml"
+          helm template ci "$chart" $args -f "$tmp/value.yaml" --show-only templates/configmap.yaml > "$tmp/value.out"
+          python - "$tmp/value.out" <<'PY'
+          import sys, yaml
+          cm = yaml.safe_load(open(sys.argv[1]))
+          keys = set(cm["data"])
+          assert "SPRING_CONFIG_IMPORT" not in keys, keys
+          assert cm["data"]["HARMLESS"].startswith("x\n"), cm["data"]["HARMLESS"]
+          PY
+          # extraEnv names and the ExternalSecret key shapes: not a Kubernetes key, not rendered.
+          if helm template ci "$chart" $args --set-string 'extraEnv[0].name=FOO BAR' --set-string 'extraEnv[0].value=x' > /dev/null 2>&1; then
+            echo "chart rendered an extraEnv name with white space" >&2; exit 1
+          fi
 
   terraform:
     name: deploy/terraform

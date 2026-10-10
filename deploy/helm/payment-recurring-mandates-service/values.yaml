@@ -54,23 +54,29 @@ networkPolicy:
 
 # Extra environment entries for the API pods (Kubernetes EnvVar objects, e.g.
 # {name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70"}). Kubernetes env wins
-# over the ConfigMap's envFrom, so the same guard as for `config` applies and more
-# (templates/_fbx-guard.tpl, the cicd-templates 2caa48f datasource guard, plus
-# templates/_helpers.tpl mandates.validateValues): no DB_URL (value or valueFrom);
-# no Spring datasource, Flyway, Liquibase or R2DBC property (SPRING_DATASOURCE_USERNAME
-# and SPRING_DATASOURCE_PASSWORD excepted), spring.application.json, jdbc_url,
-# sslfactory or sslhostnameverifier; no spring.config.{import,location,
-# additional-location,name} or spring.profiles.{active,include,default,group}, indexed
-# forms included; no fintechbankx.tls.*; no spring.kafka.*security.protocol or
-# spring.kafka.properties.*; names compared in any case and relaxed-binding spelling.
-# JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS and _JAVA_OPTIONS need a literal value (no
-# valueFrom) that mentions none of datasource, flyway, liquibase, r2dbc, jdbc, ssl,
-# fintechbankx, kafka, application.json, spring.config or spring.profiles and reads no
-# option file. Any value that is a PostgreSQL JDBC URL is parsed like config.DB_URL.
-# Each refused entry fails the render.
+# over the ConfigMap's envFrom, so the platform guard (templates/_fbx_helpers.tpl,
+# cicd-templates a4f0072 fbx.guard, called by templates/_helpers.tpl mandates.guard)
+# checks every entry: no DB_URL in any spelling (value or valueFrom); no Spring
+# datasource, Flyway, Liquibase or R2DBC property (SPRING_DATASOURCE_USERNAME and
+# SPRING_DATASOURCE_PASSWORD excepted), spring.application.json, jdbc_url,
+# sslfactory, sslhostnameverifier, sslpasswordcallback, sslmode, sslrootcert
+# (DB_SSL_ROOT_CERT is rendered by the chart), spring.config.*, spring.profiles.*,
+# spring.ssl.*, *ssl.bundle* or fintechbankx.tls.* name, in any case or
+# relaxed-binding spelling; this chart also refuses spring.kafka.*security.protocol
+# and spring.kafka.properties.* names. A *security.protocol value must be SASL_SSL
+# (kafka-msk) or SSL (kafka-strimzi) and literal. JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS
+# and _JAVA_OPTIONS need a literal value (no valueFrom) with no datasource, flyway,
+# liquibase, r2dbc, jdbc, ssl, application.json, spring.config, spring.profiles,
+# fintechbankx (this chart: the whole word), kafka (this chart), security.protocol,
+# endpoint.identification, java.security.properties, jdk.tls or hostname
+# verification word, no option file, no $( or ${. No value may contain $( and any
+# value that is a PostgreSQL JDBC URL is parsed like config.DB_URL. Names must be
+# printable ASCII. Each refused entry fails the render. envFrom, extraEnvFrom and
+# externalSecret.dataFrom are not supported (refused when set).
 extraEnv: []
 
-# The Spring profile the chart activates (rendered as SPRING_PROFILES_ACTIVE):
+# The Spring profile the chart activates (rendered as SPRING_PROFILES_ACTIVE
+# through fbx.kafkaProfile, with KAFKA_SECURITY_PROTOCOL unless config sets it):
 # kafka-msk (Amazon MSK, SASL_SSL with IAM) or kafka-strimzi (in-cluster Strimzi,
 # SSL with the KafkaUser certificate). Exactly one, nothing else: the local profile
 # switches the startup TLS assertion off and the chart refuses every route to it
@@ -78,9 +84,9 @@ extraEnv: []
 kafka:
   profile: kafka-msk
 
-# Non-secret runtime settings, rendered into a ConfigMap. Values marked
-# "required" fail the render when empty. Keys and values pass the guard described
-# at extraEnv; config.DB_URL is the one place for the JDBC URL.
+# Non-secret runtime settings, rendered into a ConfigMap with quoted keys and
+# values. Values marked "required" fail the render when empty. Keys and values pass
+# the guard described at extraEnv; config.DB_URL is the one place for the JDBC URL.
 config:
   # required (deploy/terraform output jdbc_url). Must verify the server
   # certificate against the mounted RDS CA bundle (rdsCaBundle below), e.g.
@@ -88,14 +94,15 @@ config:
   # Parsed the way PgJDBC reads it: one lower-case sslmode=verify-full, one
   # sslrootcert equal to the mounted bundle, no sslfactory, sslfactoryarg,
   # sslhostnameverifier, sslpasswordcallback or service, no percent-encoded '=' or
-  # '&', no TLS key before the '?'.
+  # '&', no TLS key before the '?', no ${ or $(.
   DB_URL: ""
   # Runtime role (DML only, granted by V5); its password comes from the
   # db-app secret. The schema owner is used only by the migration Job.
   DB_USERNAME: pay_recurring_mandates_app
   DB_POOL_MAX: "10"
   KAFKA_BOOTSTRAP_SERVERS: ""     # required: MSK bootstrap_brokers_sasl_iam (port 9098)
-  KAFKA_SECURITY_PROTOCOL: SASL_SSL     # SASL_SSL or SSL only (the profile sets it; this is the application.yml fallback)
+  # KAFKA_SECURITY_PROTOCOL is rendered from kafka.profile (SASL_SSL or SSL); setting it here
+  # is allowed only with the value that profile needs.
   OIDC_ISSUER_URI: ""             # required: https://<identity-host>/realms/fintechbankx
   OIDC_JWK_SET_URI: ""            # required: <issuer>/protocol/openid-connect/certs
   OIDC_TOKEN_URI: ""              # required: <issuer>/protocol/openid-connect/token (client credentials)

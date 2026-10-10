@@ -10,15 +10,15 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: {{ include "mandates.name" . }}
-  minReplicas: {{ .Values.autoscaling.minReplicas }}
-  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  minReplicas: {{ .Values.autoscaling.minReplicas | int }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | int }}
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | int }}
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 30

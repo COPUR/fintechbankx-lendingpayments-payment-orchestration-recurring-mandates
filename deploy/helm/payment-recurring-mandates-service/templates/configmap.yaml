@@ -2,10 +2,8 @@
 {{- range $key := $required }}
 {{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
 {{- end }}
-{{- /* Round 6 guardrail 4a (see _helpers.tpl, mandates.validateValues): the vendored platform guard
-     (_fbx-guard.tpl) parses every PostgreSQL JDBC URL the way PgJDBC does and refuses datasource,
-     config and profile names; this chart adds the profile, TLS-switch and Kafka name rules. */ -}}
-{{- include "mandates.validateValues" . }}
+{{- /* Guardrail 4a: fbx.guard runs from deployment.yaml and migration-job.yaml (mandates.guard, _helpers.tpl)
+     and checks every key and value below; keys and values are quoted so none can add a key. */ -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,10 +12,14 @@ metadata:
     {{- include "mandates.labels" . | nindent 4 }}
 data:
   {{- range $key, $value := .Values.config }}
-  {{ $key }}: {{ $value | quote }}
+  {{ $key | quote }}: {{ $value | quote }}
   {{- end }}
-  # The Kafka profile in the image (kafka.profile, validated: kafka-msk or kafka-strimzi; never local).
-  SPRING_PROFILES_ACTIVE: {{ include "mandates.kafkaProfile" . | quote }}
+  # The Kafka profile in the image, from kafka.profile (kafka-msk or kafka-strimzi; never local),
+  # and the protocol it uses (SASL_SSL with MSK, SSL with Strimzi) unless config sets KAFKA_SECURITY_PROTOCOL.
+  SPRING_PROFILES_ACTIVE: {{ include "fbx.kafkaProfile" (dict "Values" (dict "kafka" (dict "runtime" (include "mandates.kafkaRuntime" .)))) | quote }}
+  {{- if not (hasKey .Values.config "KAFKA_SECURITY_PROTOCOL") }}
+  KAFKA_SECURITY_PROTOCOL: {{ include "mandates.kafkaProtocol" . | quote }}
+  {{- end }}
   # Micrometer common tags (platform convention): app = service account, squad = namespace.
   METRICS_TAG_APP: {{ .Values.serviceAccount.name | quote }}
   METRICS_TAG_SQUAD: {{ .Release.Namespace | quote }}

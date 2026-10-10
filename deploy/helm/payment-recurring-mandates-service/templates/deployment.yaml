@@ -1,3 +1,5 @@
+{{- /* Guardrail 4a: the vendored platform guard (fbx.guard) on every value route, before anything renders. */ -}}
+{{- include "mandates.guard" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -6,7 +8,7 @@ metadata:
     {{- include "mandates.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ .Values.replicaCount | int }}
   {{- end }}
   revisionHistoryLimit: 5
   strategy:
@@ -22,7 +24,7 @@ spec:
       labels:
         {{- include "mandates.selectorLabels" . | nindent 8 }}
         app: {{ include "mandates.name" . }}
-        version: {{ .Values.image.tag | quote }}
+        version: {{ .Values.image.tag | toString | quote }}
         {{- toYaml .Values.podLabels | nindent 8 }}
       annotations:
         sidecar.istio.io/inject: "true"
@@ -31,7 +33,7 @@ spec:
         prometheus.io/port: {{ .Values.service.managementPort | quote }}
         prometheus.io/path: /actuator/prometheus
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name }}
+      serviceAccountName: {{ .Values.serviceAccount.name | quote }}
       terminationGracePeriodSeconds: 45
       securityContext:
         runAsNonRoot: true
@@ -41,13 +43,13 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       topologySpreadConstraints:
-        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+        - maxSkew: {{ .Values.topologySpread.maxSkew | int }}
           topologyKey: topology.kubernetes.io/zone
           whenUnsatisfiable: DoNotSchedule
           labelSelector:
             matchLabels:
               {{- include "mandates.selectorLabels" . | nindent 14 }}
-        - maxSkew: {{ .Values.topologySpread.maxSkew }}
+        - maxSkew: {{ .Values.topologySpread.maxSkew | int }}
           topologyKey: kubernetes.io/hostname
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
@@ -55,13 +57,13 @@ spec:
               {{- include "mandates.selectorLabels" . | nindent 14 }}
       containers:
         - name: payment-recurring-mandates-service
-          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ printf "%s:%s" (required "image.repository is required" .Values.image.repository) (required "image.tag is required" .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
           ports:
             - name: http
-              containerPort: {{ .Values.service.port }}
+              containerPort: {{ .Values.service.port | int }}
             - name: management
-              containerPort: {{ .Values.service.managementPort }}
+              containerPort: {{ .Values.service.managementPort | int }}
           env:
             # Migrations run only in the pre-install/pre-upgrade Job as the
             # schema owner; the pods hold the runtime role and never migrate.
@@ -70,10 +72,8 @@ spec:
             # Platform convention: the RDS CA bundle path, for clients that take it separately from DB_URL.
             - name: DB_SSL_ROOT_CERT
               value: "{{ .Values.rdsCaBundle.mountPath }}/{{ .Values.rdsCaBundle.key }}"
-            {{- /* Kubernetes env wins over envFrom: extraEnv is validated (no DB_URL, no datasource,
-                 config, profile, TLS-switch or Kafka name, JVM options literal and checked; see
-                 _helpers.tpl mandates.validateValues). */ -}}
-            {{- include "mandates.validateValues" . }}
+            {{- /* Kubernetes env wins over envFrom: extraEnv passed mandates.guard above (no DB_URL, no
+                 datasource, config, profile, TLS or Kafka name, JVM options literal and checked). */ -}}
             {{- range .Values.extraEnv }}
             {{- toYaml (list .) | nindent 12 }}
             {{- end }}
@@ -117,14 +117,14 @@ spec:
             - name: tmp
               mountPath: /tmp
             - name: rds-ca-bundle
-              mountPath: {{ .Values.rdsCaBundle.mountPath }}
+              mountPath: {{ .Values.rdsCaBundle.mountPath | quote }}
               readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
         - name: rds-ca-bundle
           configMap:
-            name: {{ .Values.rdsCaBundle.configMapName }}
+            name: {{ .Values.rdsCaBundle.configMapName | quote }}
             items:
-              - key: {{ .Values.rdsCaBundle.key }}
-                path: {{ .Values.rdsCaBundle.key }}
+              - key: {{ .Values.rdsCaBundle.key | quote }}
+                path: {{ .Values.rdsCaBundle.key | quote }}

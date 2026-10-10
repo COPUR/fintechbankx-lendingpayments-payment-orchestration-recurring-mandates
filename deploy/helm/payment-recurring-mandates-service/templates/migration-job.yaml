@@ -1,4 +1,6 @@
 {{- if .Values.migration.enabled }}
+{{- /* Guardrail 4a: the vendored platform guard (fbx.guard) on every value route, before anything renders. */ -}}
+{{- include "mandates.guard" . -}}
 {{- /*
 Flyway as a separate step (platform contract "Database roles"): runs before
 every install and upgrade, as the schema owner, with the db-migration secret.
@@ -19,21 +21,21 @@ metadata:
     helm.sh/hook-weight: "-10"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
-  refreshInterval: {{ .Values.externalSecret.refreshInterval }}
+  refreshInterval: {{ .Values.externalSecret.refreshInterval | quote }}
   secretStoreRef:
-    kind: {{ .Values.externalSecret.secretStoreRef.kind }}
-    name: {{ .Values.externalSecret.secretStoreRef.name }}
+    kind: {{ .Values.externalSecret.secretStoreRef.kind | quote }}
+    name: {{ .Values.externalSecret.secretStoreRef.name | quote }}
   target:
     name: {{ include "mandates.migrationName" . }}
     creationPolicy: Owner
   data:
     - secretKey: DB_MIGRATION_USERNAME
       remoteRef:
-        key: {{ include "mandates.remoteKey" (list "migration.remoteSecretName" .Values.migration.remoteSecretName .) }}
+        key: {{ include "mandates.remoteKey" (list "migration.remoteSecretName" .Values.migration.remoteSecretName .) | quote }}
         property: username
     - secretKey: DB_MIGRATION_PASSWORD
       remoteRef:
-        key: {{ include "mandates.remoteKey" (list "migration.remoteSecretName" .Values.migration.remoteSecretName .) }}
+        key: {{ include "mandates.remoteKey" (list "migration.remoteSecretName" .Values.migration.remoteSecretName .) | quote }}
         property: password
 ---
 apiVersion: batch/v1
@@ -51,8 +53,8 @@ metadata:
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
-  backoffLimit: {{ .Values.migration.backoffLimit }}
-  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  backoffLimit: {{ .Values.migration.backoffLimit | int }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds | int }}
   template:
     metadata:
       # app.kubernetes.io/name = the service account name, so the mesh
@@ -81,8 +83,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: db-migration
-          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ printf "%s:%s" (required "image.repository is required" .Values.image.repository) (required "image.tag is required" .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
           args: ["migrate"]
           env:
             - name: DB_URL
@@ -91,7 +93,7 @@ spec:
             - name: DB_USERNAME
               value: {{ .Values.config.DB_USERNAME | quote }}
             - name: DB_SSL_ROOT_CERT
-              value: "{{ .Values.rdsCaBundle.mountPath }}/{{ .Values.rdsCaBundle.key }}"
+              value: {{ printf "%s/%s" .Values.rdsCaBundle.mountPath .Values.rdsCaBundle.key | quote }}
           envFrom:
             - secretRef:
                 name: {{ include "mandates.migrationName" . }}
@@ -106,15 +108,15 @@ spec:
             - name: tmp
               mountPath: /tmp
             - name: rds-ca-bundle
-              mountPath: {{ .Values.rdsCaBundle.mountPath }}
+              mountPath: {{ .Values.rdsCaBundle.mountPath | quote }}
               readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
         - name: rds-ca-bundle
           configMap:
-            name: {{ .Values.rdsCaBundle.configMapName }}
+            name: {{ .Values.rdsCaBundle.configMapName | quote }}
             items:
-              - key: {{ .Values.rdsCaBundle.key }}
-                path: {{ .Values.rdsCaBundle.key }}
+              - key: {{ .Values.rdsCaBundle.key | quote }}
+                path: {{ .Values.rdsCaBundle.key | quote }}
 {{- end }}

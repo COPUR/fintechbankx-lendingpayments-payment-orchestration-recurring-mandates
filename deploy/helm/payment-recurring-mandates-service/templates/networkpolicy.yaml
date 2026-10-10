@@ -19,18 +19,18 @@ spec:
         {{- range .Values.networkPolicy.apiNamespaces }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ . }}
+              kubernetes.io/metadata.name: {{ . | quote }}
         {{- end }}
       ports:
         - protocol: TCP
-          port: {{ .Values.service.port }}
+          port: {{ .Values.service.port | int }}
     - from:
         {{- range .Values.networkPolicy.managementNamespaces }}
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: {{ . }}
+              kubernetes.io/metadata.name: {{ . | quote }}
         {{- end }}
       ports:
         - protocol: TCP
-          port: {{ .Values.service.managementPort }}
+          port: {{ .Values.service.managementPort | int }}
 {{- end }}
