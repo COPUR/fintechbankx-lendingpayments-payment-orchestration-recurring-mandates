@@ -46,6 +46,86 @@ class TlsEnforcementInitializerTest {
         });
     }
 
+    // Round 6, guardrail 4a: the URL is read the way PgJDBC reads it (keys case-sensitive and
+    // lower case, the last of two sslmode values would win), and every URL a pool can use is read.
+
+    @Test
+    void refusesASecondSslmodeEvenWhenTheFirstIsVerifyFull() {
+        runner.withPropertyValues(VERIFY_FULL + "&sslmode=disable").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasMessageContaining("spring.datasource.url")
+                    .hasMessageContaining("sslmode exactly once")
+                    .hasMessageContaining("found 2")
+                    .hasMessageNotContaining("db.internal");
+        });
+    }
+
+    @Test
+    void anUpperCaseSslmodeIsNoSslmodeBecauseTheDriverIgnoresIt() {
+        runner.withPropertyValues(VERIFY_FULL.replace("sslmode=verify-full", "SSLMODE=verify-full")).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .hasMessageContaining("found no sslmode")
+                    .hasMessageContaining("SSLMODE");
+        });
+        runner.withPropertyValues(VERIFY_FULL.replace("sslmode=verify-full", "SslMode=verify-full")).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure())).hasMessageContaining("found no sslmode");
+        });
+    }
+
+    @Test
+    void aValueThatOnlyContainsVerifyFullIsNotAnSslmode() {
+        runner.withPropertyValues("spring.datasource.url=jdbc:postgresql://db.internal:5432/db_pay"
+                + "?sslmode=require&ApplicationName=sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure())).hasMessageContaining("found sslmode=require");
+        });
+    }
+
+    @Test
+    void refusesTheParametersThatBypassCertificateOrHostNameVerification() {
+        for (String parameter : new String[] {"sslfactory=org.postgresql.ssl.NonValidatingFactory", "sslfactoryarg=x",
+                "sslhostnameverifier=x.Y", "sslpasswordcallback=x", "service=prod"}) {
+            String name = parameter.substring(0, parameter.indexOf('='));
+            runner.withPropertyValues(VERIFY_FULL + "&" + parameter).run(context -> {
+                assertThat(context).as(parameter).hasFailed();
+                assertThat(rootCause(context.getStartupFailure())).as(parameter)
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("spring.datasource.url")
+                        .hasMessageContaining("must not set " + name);
+            });
+        }
+    }
+
+    @Test
+    void theHikariJdbcUrlIsReadTooInEitherSpelling() {
+        // spring.datasource.hikari.jdbc-url replaces spring.datasource.url for the pool.
+        for (String key : new String[] {"spring.datasource.hikari.jdbc-url", "spring.datasource.hikari.jdbcUrl"}) {
+            runner.withPropertyValues(VERIFY_FULL, key + "=jdbc:postgresql://db.internal:5432/db_pay?sslmode=require").run(context -> {
+                assertThat(context).as(key).hasFailed();
+                assertThat(rootCause(context.getStartupFailure())).as(key)
+                        .hasMessageContaining("spring.datasource.hikari.jdbc-url")
+                        .hasMessageContaining("found sslmode=require")
+                        .hasMessageNotContaining("db.internal");
+            });
+        }
+        runner.withPropertyValues(VERIFY_FULL, "spring.datasource.hikari.jdbc-url=" + VERIFY_FULL.substring(VERIFY_FULL.indexOf('=') + 1))
+                .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void theFlywayUrlIsReadToo() {
+        runner.withPropertyValues(VERIFY_FULL, "spring.flyway.url=jdbc:postgresql://db.internal:5432/db_pay?sslmode=require").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .hasMessageContaining("spring.flyway.url")
+                    .hasMessageContaining("found sslmode=require");
+        });
+    }
+
     @Test
     void refusesADatasourceUrlWithoutAnySslmode() {
         runner.withPropertyValues("spring.datasource.url=jdbc:postgresql://db.internal:5432/db_pay").run(context -> {
@@ -91,6 +171,37 @@ class TlsEnforcementInitializerTest {
                     .hasMessageContaining("spring.kafka.producer.security.protocol")
                     .hasMessageContaining("found PLAINTEXT");
         });
+    }
+
+    @Test
+    void theRawPropertiesOverridesArePlainTextTooWhenTheySaySo() {
+        // Read the way KafkaProperties builds the client configuration, not from one key.
+        withKafkaClient().withPropertyValues(VERIFY_FULL, "spring.kafka.security.protocol=SASL_SSL",
+                "spring.kafka.producer.properties.security.protocol=PLAINTEXT").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .hasMessageContaining("Kafka producer")
+                    .hasMessageContaining("spring.kafka.producer.properties.security.protocol")
+                    .hasMessageContaining("found PLAINTEXT");
+        });
+        withKafkaClient().withPropertyValues(VERIFY_FULL, "spring.kafka.security.protocol=SASL_SSL",
+                "spring.kafka.properties.security.protocol=PLAINTEXT").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .hasMessageContaining("spring.kafka.properties.security.protocol")
+                    .hasMessageContaining("found PLAINTEXT");
+        });
+        // The consumer's own override is read for the consumer, and only there.
+        runner.withBean(ConsumerFactory.class, () -> Mockito.mock(ConsumerFactory.class))
+                .withPropertyValues(VERIFY_FULL, "spring.kafka.security.protocol=SASL_SSL",
+                        "spring.kafka.consumer.properties.security.protocol=PLAINTEXT").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(rootCause(context.getStartupFailure()))
+                    .hasMessageContaining("Kafka consumer")
+                    .hasMessageContaining("spring.kafka.consumer.properties.security.protocol");
+        });
+        withKafkaClient().withPropertyValues(VERIFY_FULL, "spring.kafka.security.protocol=SASL_SSL",
+                "spring.kafka.consumer.properties.security.protocol=PLAINTEXT").run(context -> assertThat(context).hasNotFailed());
     }
 
     @Test

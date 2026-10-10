@@ -144,11 +144,14 @@ management:
 fintechbankx:
   tls:
     # Startup TLS assertion (TlsEnforcementInitializer): the service does not start
-    # unless spring.datasource.url carries sslmode=verify-full and, when a Kafka
-    # client is configured, its security.protocol is SASL_SSL (MSK) or SSL
+    # unless every datasource URL (spring.datasource.url, spring.datasource.hikari.jdbc-url,
+    # spring.flyway.url), read the way PgJDBC reads it, carries exactly one
+    # sslmode=verify-full and no sslfactory, sslfactoryarg, sslhostnameverifier,
+    # sslpasswordcallback or service, and, when a Kafka client is configured, the
+    # effective security.protocol Spring Boot builds for it is SASL_SSL (MSK) or SSL
     # (Strimzi mutual TLS); PLAINTEXT, SASL_PLAINTEXT and unset refuse. Only the local
     # profile and the test resources set this false; the chart refuses the
-    # FINTECHBANKX_TLS_ENFORCE key and the local profile.
+    # FINTECHBANKX_TLS_ENFORCE key, the local profile and every route to them.
     enforce: true
 
 openfinance:
