@@ -115,6 +115,50 @@ jobs:
                --set externalSecret.remoteSecretName=a --set externalSecret.serviceClientSecretName=b > /dev/null 2>&1; then
             echo "chart rendered without DB_URL / Kafka / OIDC / accounts settings"; exit 1
           fi
+      # Governance round 3 (2b): no Spring config redirection through values. The guard
+      # (templates/_helpers.tpl, mandates.guardEnvKey) also refuses the datasource and Flyway
+      # URL keys and FINTECHBANKX_TLS_ENFORCE, in any case or relaxed-binding spelling, in
+      # `config` and in `extraEnv`. The only configtree the platform allows is one the chart
+      # itself renders on optional:configtree:/etc/fintechbankx/config/; this chart renders none.
+      - name: Spring config redirection fails the render
+        run: |
+          chart=deploy/helm/payment-recurring-mandates-service
+          args="--namespace payments \
+            --set image.repository=ci/payment-recurring-mandates-service --set image.tag=${{ github.sha }} \
+            --set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
+            --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client \
+            --set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration \
+            --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem \
+            --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
+            --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
+            --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
+            --set config.OIDC_TOKEN_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/token \
+            --set config.ACCOUNTS_SERVICE_BASE_URL=http://accounts.ci:8080"
+          for key in SPRING_CONFIG_IMPORT spring_config_location Spring_Config_Additional_Location SPRING-CONFIG-IMPORT \
+                     SPRING_DATASOURCE_URL SPRING_FLYWAY_URL FINTECHBANKX_TLS_ENFORCE; do
+            if helm template ci "$chart" $args --set-string "config.$key=optional:configtree:/etc/fintechbankx/config/" > /dev/null 2>&1; then
+              echo "chart rendered config.$key" >&2; exit 1
+            fi
+          done
+          if helm template ci "$chart" $args --set-string 'config.spring\.config\.import=optional:configtree:/etc/fintechbankx/config/' > /dev/null 2>&1; then
+            echo "chart rendered config.spring.config.import" >&2; exit 1
+          fi
+          for key in SPRING_CONFIG_IMPORT spring_config_location SPRING_DATASOURCE_URL FINTECHBANKX_TLS_ENFORCE; do
+            if helm template ci "$chart" $args --set-string "extraEnv[0].name=$key" --set-string 'extraEnv[0].value=x' > /dev/null 2>&1; then
+              echo "chart rendered extraEnv $key" >&2; exit 1
+            fi
+          done
+          # The local profile switches fintechbankx.tls.enforce off; the chart never activates it.
+          if helm template ci "$chart" $args --set-string 'config.SPRING_PROFILES_ACTIVE=kafka-msk\,local' > /dev/null 2>&1; then
+            echo "chart rendered the local profile" >&2; exit 1
+          fi
+          # The chart itself renders no SPRING_CONFIG_* setting; a harmless extraEnv entry still reaches the API pods.
+          if grep -qi 'SPRING_CONFIG' <<<"$(helm template ci "$chart" $args)"; then
+            echo "the chart renders a SPRING_CONFIG_* setting" >&2; exit 1
+          fi
+          helm template ci "$chart" $args --show-only templates/deployment.yaml \
+            --set-string 'extraEnv[0].name=JAVA_TOOL_OPTIONS' --set-string 'extraEnv[0].value=-XX:MaxRAMPercentage=70' \
+            | grep -q 'name: JAVA_TOOL_OPTIONS'
 
   terraform:
     name: deploy/terraform

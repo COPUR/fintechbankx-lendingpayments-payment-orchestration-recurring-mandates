@@ -70,3 +70,32 @@ app.kubernetes.io/name = the service account name.
 {{- define "mandates.migrationName" -}}
 {{ include "mandates.name" . }}-db-migration
 {{- end -}}
+
+{{- /*
+Guard for a runtime setting the chart puts into the pods' environment (a
+`config` key, rendered into the ConfigMap, or an `extraEnv` name). Fails the
+render for:
+  - Spring config redirection (SPRING_CONFIG_IMPORT, SPRING_CONFIG_LOCATION,
+    SPRING_CONFIG_ADDITIONAL_LOCATION): it would let a values override point
+    the service at configuration outside this chart. The only configtree the
+    platform allows is one the chart itself renders on the fixed mount
+    optional:configtree:/etc/fintechbankx/config/; this chart renders none.
+  - datasource and Flyway URL keys (SPRING_DATASOURCE_URL, SPRING_FLYWAY_URL):
+    the database URL is config.DB_URL only, which the ConfigMap checks for
+    sslmode=verify-full and the mounted RDS CA bundle.
+  - FINTECHBANKX_TLS_ENFORCE: the service's startup TLS assertion is never
+    switched off by the chart; only local and test configuration may.
+The key is compared case-insensitively and in Spring's relaxed-binding
+spellings (spring.config.import, spring-config-import, ...), so no spelling
+slips past.
+Usage: include "mandates.guardEnvKey" (list "config" $key)
+*/ -}}
+{{- define "mandates.guardEnvKey" -}}
+{{- $source := index . 0 -}}
+{{- $key := index . 1 -}}
+{{- $normalised := $key | upper | replace "." "_" | replace "-" "_" -}}
+{{- $forbidden := list "SPRING_CONFIG_IMPORT" "SPRING_CONFIG_LOCATION" "SPRING_CONFIG_ADDITIONAL_LOCATION" "SPRING_DATASOURCE_URL" "SPRING_FLYWAY_URL" "FINTECHBANKX_TLS_ENFORCE" -}}
+{{- if has $normalised $forbidden -}}
+{{- fail (printf "%s must not set %s: Spring config redirection, datasource/Flyway URL keys and FINTECHBANKX_TLS_ENFORCE are refused (the database URL is config.DB_URL; a configtree may only be rendered by the chart on optional:configtree:/etc/fintechbankx/config/)" $source $key) -}}
+{{- end -}}
+{{- end -}}

@@ -70,6 +70,10 @@ spec:
             # Platform convention: the RDS CA bundle path, for clients that take it separately from DB_URL.
             - name: DB_SSL_ROOT_CERT
               value: "{{ .Values.rdsCaBundle.mountPath }}/{{ .Values.rdsCaBundle.key }}"
+            {{- range .Values.extraEnv }}
+            {{- include "mandates.guardEnvKey" (list "extraEnv" (required "extraEnv[].name is required" .name)) }}
+            {{- toYaml (list .) | nindent 12 }}
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "mandates.name" . }}
