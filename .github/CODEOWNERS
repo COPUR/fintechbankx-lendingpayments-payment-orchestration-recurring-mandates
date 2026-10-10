@@ -7,3 +7,6 @@
 # published_events: evt.pay.mandate.v1 (Payments.Mandate.Created.v1, Payments.Mandate.Revoked.v1, Payments.Mandate.PaymentAccepted.v1)
 # consumed_events: none
 * @COPUR
+
+# AsyncAPI breaking-change waivers need an owner review (cicd-templates 13d09a1).
+**/*.accepted-breaking.txt @COPUR
