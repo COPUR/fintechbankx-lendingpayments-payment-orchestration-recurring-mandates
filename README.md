@@ -27,7 +27,7 @@ Bu repository, FinTechBankX DDD/EDA dönüşümünde **svc-pay-recurring-mandate
 | review_cadence | quarterly |
 | data_owner | svc-pay-recurring-mandates (`sc_pay_recurring_mandates`) |
 | upstream_dependencies | Keycloak realm `fintechbankx` (TPP tokens, client credentials); consent-authorization-service `GET /api/v1/consents/{id}` at `CONSENT_SERVICE_BASE_URL` (PSU-authorised consents, scope `INITIATEVRP`); accounts API `GET /api/v1/accounts/{accountId}` at `ACCOUNTS_SERVICE_BASE_URL` + `ACCOUNTS_SERVICE_PATH` (interim: no provider serves it to services yet; calls fail closed with 503) |
-| published_events | `evt.pay.mandate.created.v1` (`Payments.Mandate.Created.v1`), `evt.pay.mandate.revoked.v1` (`Payments.Mandate.Revoked.v1`), `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.PaymentAccepted.v1`); no DLQ: dead-letter topics are owned by the consuming service (ADR-019/024) |
+| published_events | `evt.pay.mandate.v1`, one topic per aggregate (ADR-019): `Payments.Mandate.Created.v1`, `Payments.Mandate.Revoked.v1`, `Payments.Mandate.PaymentAccepted.v1`, keyed by the mandate id, event named by the `eventType` record header; no DLQ: dead-letter topics are owned by the consuming service (ADR-019/024) |
 | consumed_events | none |
 
 ### Run, test, deploy
@@ -50,7 +50,7 @@ Deployed, the pods verify Aurora's certificate: `DB_URL` must carry
 runs and tests keep their own URLs.
 
 The outbox relay is off by default (`OUTBOX_RELAY_ENABLED=false`) until the
-topics exist in the platform topic catalog; the AsyncAPI catalog PR is pending.
+topic `evt.pay.mandate.v1` exists in the platform topic catalog; the AsyncAPI catalog PR is pending.
 
 ### Service mesh
 

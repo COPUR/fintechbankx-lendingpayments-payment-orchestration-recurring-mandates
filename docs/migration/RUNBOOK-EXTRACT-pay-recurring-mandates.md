@@ -11,7 +11,7 @@ steps of `fbx-monolith-extraction`. Status: **Proposed**.
 | Context / service | `pay` / `svc-pay-recurring-mandates` (Helm/SA `payment-recurring-mandates-service`, namespace `payments`) |
 | Slice | Mandate aggregate (`VrpConsent`): authorise, read, revoke; collections (`VrpPayment`) under its monthly limit |
 | Owned data | `db_pay_recurring_mandates_<env>`, schema `sc_pay_recurring_mandates`: `mandate_record`, `mandate_payment`, `mandate_idempotency_record`, `mandate_outbox_event`, `dpop_proof_jti` (DPoP replay cache) |
-| Events | `evt.pay.mandate.created.v1`, `evt.pay.mandate.revoked.v1`, `evt.pay.mandate.payment-accepted.v1` (`Payments.Mandate.{Created,Revoked,PaymentAccepted}.v1`) (no DLQ here: dead-letter topics belong to consumers, ADR-019/024); contract `api/asyncapi/svc-pay-recurring-mandates.yaml` (catalog PR pending) |
+| Events | `evt.pay.mandate.v1`, one topic per aggregate (ADR-019), keyed by the mandate id, carrying `Payments.Mandate.{Created,Revoked,PaymentAccepted}.v1` (named by the `eventType` record header) (no DLQ here: dead-letter topics belong to consumers, ADR-019/024); contract `api/asyncapi/svc-pay-recurring-mandates.yaml` (catalog PR pending) |
 | Depends on | Keycloak realm `fintechbankx` (TPP tokens with `aud` = service id and DPoP binding `cnf.jkt`, so TPP clients must be DPoP-enabled before cutover; client-credentials client `svc-pay-recurring-mandates`); consent-authorization-service `GET /api/v1/consents/{id}` (`CONSENT_SERVICE_BASE_URL`; this service must be on its allow-list, which the provider branch already has) for the PSU-authorised consent every mandate is bound to; accounts API `GET /api/v1/accounts/{accountId}` (`ACCOUNTS_SERVICE_BASE_URL` + `ACCOUNTS_SERVICE_PATH`; interim, no provider yet, see checklist) for the debtor account |
 
 ## 1. Data ownership split
@@ -42,7 +42,7 @@ Consequences:
 | 1 | DBA bootstrap (section "Database roles" below): create the schema owner `pay_recurring_mandates_owner` and the runtime role `pay_recurring_mandates_app`, write their credentials to `<env>/payment-recurring-mandates-service/db-migration` and `<env>/payment-recurring-mandates-service/db-app` (ESO may read only `<env>/<service account>/`). Set `config.DB_URL` to the Terraform output `jdbc_url` (`sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem`; the chart refuses anything else and mounts ConfigMap `rds-ca-bundle`, which trust-manager must have published in `payments`), `migration.remoteSecretName` to `migration_db_secret_name`. Deploy with `OUTBOX_RELAY_ENABLED=false`; the pre-install hook Job runs Flyway as the owner (V1 to V7) before the pods start. | uninstall the chart; drop the schema |
 | 2 | Mesh team has applied "Requests to the mesh team" below: B (Aurora, MSK, STS egress) before step 1 completes, otherwise the readiness check (`db`) fails under `REGISTRY_ONLY`; A (gateway route) and C (callee ALLOW rules) before step 3. | remove the route; ALLOW rules and egress can stay |
 | 3 | Route `/open-finance/v1/vrp/**` at the ingress gateway from the monolith to this service; announce to TPPs that mandates must be re-created. The soak window starts (72 h without a rollback trigger). | "Rollback during the soak window" below: freeze the writes, route back, account for what stays here |
-| 4 | Only after the soak window ended without a rollback, and once `evt.pay.mandate.*.v1` exist in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 3 are relayed in order. | relay off; unsent events stay in the outbox (events already published cannot be recalled) |
+| 4 | Only after the soak window ended without a rollback, and once `evt.pay.mandate.v1` exists in the platform topic catalog: `OUTBOX_RELAY_ENABLED=true`. Events written since step 3 are relayed in order. | relay off; unsent events stay in the outbox (events already published cannot be recalled) |
 | 5 | Remove `recurringpayments` from the monolith (`open-finance-context`). | revert the removal commit |
 
 Rollback triggers (any one, measured over 15 minutes after a step): 5xx rate on
@@ -73,7 +73,7 @@ What a rollback loses or leaves to replay, exactly:
   collections by hand.
 - **Revocations made here** are not known to the monolith; mandates revoked here must not be
   re-created there (check the export).
-- **Nothing published to be recalled**: with the relay off, no `evt.pay.mandate.*` event left this
+- **Nothing published to be recalled**: with the relay off, no `evt.pay.mandate.v1` event left this
   service; the unsent outbox rows stay in `sc_pay_recurring_mandates` and are discarded (or relayed
   later if the cutover is retried with the same data, which also needs the mandates restored).
 - **Not lost**: the data in `sc_pay_recurring_mandates` itself; the schema is kept until the
@@ -171,7 +171,7 @@ the sidecar on.
 - [x] Monthly limit enforced under concurrency (advisory lock per mandate plus version compare-and-set)
 - [x] Debtor account check through the accounts API with a service token, failing closed
 - [ ] An accounts API serving `GET /api/v1/accounts/{accountId}` to services (interim gap: the monolith has no internal account-status read; its only account read is the TPP-facing AIS `GET /open-finance/v1/accounts/{accountId}` in `open-finance-context`, which needs a PSU AIS consent, a DPoP-bound TPP token and returns `Data.Account.Status` without a debit flag; it is being extracted to svc-of-personal-financial-data. `ACCOUNTS_SERVICE_BASE_URL` and `ACCOUNTS_SERVICE_PATH` are configurable; until a provider exists, mandates naming a debtor account fail closed with 503)
-- [ ] Topics `evt.pay.mandate.*.v1` in the platform topic catalog and AsyncAPI catalog PR merged
+- [ ] Topic `evt.pay.mandate.v1` in the platform topic catalog and AsyncAPI catalog PR merged
 - [ ] Mesh team requests A (gateway route and ingress ALLOW), B (Aurora, MSK, STS egress) and C (callee ALLOW rules) applied; consent-authorization-service ALLOW reported applied, others open
 - [ ] Ingress route switched; monolith `recurringpayments` removed
 
@@ -202,7 +202,7 @@ When `OutboxEventsParked` fires (or `outbox_parked_rows` is above 0) a consumer 
 missing an event. Find the rows:
 
 ```sql
-SELECT event_id, created_seq, topic, aggregate_id, attempts, parked_reason, last_error, parked_at
+SELECT event_id, created_seq, event_type, aggregate_id, attempts, parked_reason, last_error, parked_at
 FROM sc_pay_recurring_mandates.mandate_outbox_event
 WHERE parked_at IS NOT NULL
 ORDER BY created_seq;

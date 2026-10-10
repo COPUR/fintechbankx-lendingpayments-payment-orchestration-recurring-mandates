@@ -252,12 +252,11 @@ resource "aws_iam_role_policy" "workload" {
 
 locals {
   msk_topic_arn_prefix = var.msk_cluster_arn == "" ? "" : replace(var.msk_cluster_arn, ":cluster/", ":topic/")
-  # Exactly the topics in api/asyncapi/svc-pay-recurring-mandates.yaml. No DLQ:
-  # dead-letter topics belong to consumers (ADR-019/024).
+  # Exactly the topic in api/asyncapi/svc-pay-recurring-mandates.yaml: one topic
+  # per aggregate (ADR-019). No DLQ: dead-letter topics belong to consumers
+  # (ADR-019/024).
   published_topics = [
-    "evt.pay.mandate.created.v1",
-    "evt.pay.mandate.revoked.v1",
-    "evt.pay.mandate.payment-accepted.v1",
+    "evt.pay.mandate.v1",
   ]
 }
 

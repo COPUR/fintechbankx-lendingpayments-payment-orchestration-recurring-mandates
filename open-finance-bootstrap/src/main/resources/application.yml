@@ -179,7 +179,7 @@ mandates:
   outbox:
     retention: P7D
     relay:
-      # Off until the evt.pay.mandate.*.v1 topics exist on the platform cluster.
+      # Off until the evt.pay.mandate.v1 topic exists on the platform cluster.
       enabled: ${OUTBOX_RELAY_ENABLED:false}
       interval: PT1S
       batch-size: 100

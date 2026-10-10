@@ -10,7 +10,7 @@ not listed is not done.
 TPP ─▶ Istio ingress ─▶ payment-recurring-mandates-service pods (EKS, ns payments, 3..12, HPA on CPU)
                            │  ├─ HTTP (service token) ─▶ accounts API (debtor account status)
                            │  └─ JDBC ─▶ Aurora PostgreSQL Serverless v2 (Multi-AZ)
-                           └─ outbox relay ─▶ MSK (IAM) evt.pay.mandate.*.v1
+                           └─ outbox relay ─▶ MSK (IAM) evt.pay.mandate.v1
 ```
 
 | Artifact | Path |
@@ -37,7 +37,7 @@ TPP ─▶ Istio ingress ─▶ payment-recurring-mandates-service pods (EKS, ns
 - No repository serves the accounts API to services yet, and the monolith has no internal account-status read (its only account read is the TPP-facing AIS endpoint, which needs a PSU AIS consent and a DPoP-bound TPP token). `ACCOUNTS_SERVICE_BASE_URL` (required by the chart) and `ACCOUNTS_SERVICE_PATH` (default `/api/v1/accounts/{accountId}`) must point at the system of record once one exists; until then a mandate whose consent names a debtor account fails closed with 503. This is an interim gap, not a design.
 - DPoP is enforced on the TPP-facing VRP API (platform contract: DPoP applies by caller): DPoP scheme, `cnf.jkt`-bound token, proof signature/htm/htu/iat/ath checks and a single-use jti in PostgreSQL (`dpop_proof_jti`, purged every 10 minutes). Plain Bearer is 401. Internal callers, if any appear, get `/api/v1` paths with Bearer.
 - The read cache (`InMemoryVrpCacheAdapter`) is per pod: a GET on another replica may show a mandate as Authorised for up to 30 s after revocation. Collections always read the database.
-- Kafka topics and ACLs for `evt.pay.mandate.*.v1` are not yet in the platform topic catalog; the relay is off until they are.
+- The Kafka topic and ACLs for `evt.pay.mandate.v1` are not yet in the platform topic catalog; the relay is off until they are.
 - `msk-client-access` is not on the terraform-modules main branch; an inline topic-scoped IAM policy is used (TODO in `main.tf`).
 - `microservice-base` is referenced at `ref=main`; pin a tag once released.
 - No load test yet; HPA targets are starting values.

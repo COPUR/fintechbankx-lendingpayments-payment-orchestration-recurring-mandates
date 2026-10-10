@@ -47,7 +47,7 @@ built from the gateway's `X-Forwarded-Proto/Host/Port`.
 | Expiry at creation | not checked | must be in the future |
 | Money | `BigDecimal` and a string, any scale | `Money`: ISO 4217, scale fixed to the currency's minor units, more decimals refused |
 | Debtor account | not modelled | optional; checked through the accounts API at creation and before each collection; fails closed |
-| Events | none | `evt.pay.mandate.created.v1`, `.revoked.v1`, `.payment-accepted.v1` through a transactional outbox |
+| Events | none | `Payments.Mandate.{Created,Revoked,PaymentAccepted}.v1` on the aggregate topic `evt.pay.mandate.v1` through a transactional outbox |
 | Response headers | `X-OF-Cache: HIT/MISS` | removed (cache is internal) |
 
 ## Not carried over

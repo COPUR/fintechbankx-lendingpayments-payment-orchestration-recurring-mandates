@@ -83,7 +83,7 @@ config:
   ACCOUNTS_ADAPTER: http
   ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API base URL
   ACCOUNTS_SERVICE_PATH: /api/v1/accounts/{accountId}
-  OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.*.v1 exist on the cluster
+  OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.v1 exists on the cluster
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
 
 # Flyway migration step: a Helm pre-install/pre-upgrade Job running the image
