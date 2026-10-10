@@ -2,19 +2,10 @@
 {{- range $key := $required }}
 {{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
 {{- end }}
-{{- /* No Spring config redirection, datasource or Flyway URL key, or TLS-enforcement switch through values (see _helpers.tpl). */ -}}
-{{- range $key, $_ := .Values.config }}
-{{- include "mandates.guardEnvKey" (list "config" $key) }}
-{{- end }}
-{{- /* The local profile turns the startup TLS assertion off (fintechbankx.tls.enforce); it never runs in a cluster. */ -}}
-{{- if has "local" (splitList "," (.Values.config.SPRING_PROFILES_ACTIVE | default "" | replace " " "")) }}
-{{- fail "config.SPRING_PROFILES_ACTIVE must not include the local profile (it disables fintechbankx.tls.enforce)" }}
-{{- end }}
-{{- /* Aurora: verify the server certificate against the mounted RDS CA bundle. */ -}}
-{{- $rootcert := printf "sslrootcert=%s/%s" .Values.rdsCaBundle.mountPath .Values.rdsCaBundle.key }}
-{{- if not (and (contains "sslmode=verify-full" .Values.config.DB_URL) (contains $rootcert .Values.config.DB_URL)) }}
-{{- fail (printf "config.DB_URL must use sslmode=verify-full&%s (mounted ConfigMap %s)" $rootcert .Values.rdsCaBundle.configMapName) }}
-{{- end }}
+{{- /* Round 6 guardrail 4a (see _helpers.tpl, mandates.validateValues): the vendored platform guard
+     (_fbx-guard.tpl) parses every PostgreSQL JDBC URL the way PgJDBC does and refuses datasource,
+     config and profile names; this chart adds the profile, TLS-switch and Kafka name rules. */ -}}
+{{- include "mandates.validateValues" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -25,6 +16,8 @@ data:
   {{- range $key, $value := .Values.config }}
   {{ $key }}: {{ $value | quote }}
   {{- end }}
+  # The Kafka profile in the image (kafka.profile, validated: kafka-msk or kafka-strimzi; never local).
+  SPRING_PROFILES_ACTIVE: {{ include "mandates.kafkaProfile" . | quote }}
   # Micrometer common tags (platform convention): app = service account, squad = namespace.
   METRICS_TAG_APP: {{ .Values.serviceAccount.name | quote }}
   METRICS_TAG_SQUAD: {{ .Release.Namespace | quote }}

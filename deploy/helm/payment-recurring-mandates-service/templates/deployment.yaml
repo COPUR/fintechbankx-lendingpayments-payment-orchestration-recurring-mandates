@@ -70,8 +70,11 @@ spec:
             # Platform convention: the RDS CA bundle path, for clients that take it separately from DB_URL.
             - name: DB_SSL_ROOT_CERT
               value: "{{ .Values.rdsCaBundle.mountPath }}/{{ .Values.rdsCaBundle.key }}"
+            {{- /* Kubernetes env wins over envFrom: extraEnv is validated (no DB_URL, no datasource,
+                 config, profile, TLS-switch or Kafka name, JVM options literal and checked; see
+                 _helpers.tpl mandates.validateValues). */ -}}
+            {{- include "mandates.validateValues" . }}
             {{- range .Values.extraEnv }}
-            {{- include "mandates.guardEnvKey" (list "extraEnv" (required "extraEnv[].name is required" .name)) }}
             {{- toYaml (list .) | nindent 12 }}
             {{- end }}
           envFrom:

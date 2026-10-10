@@ -123,11 +123,17 @@ jobs:
                --set externalSecret.remoteSecretName=a --set externalSecret.serviceClientSecretName=b > /dev/null 2>&1; then
             echo "chart rendered without DB_URL / Kafka / OIDC / accounts settings"; exit 1
           fi
-      # Governance round 3 (2b): no Spring config redirection through values. The guard
-      # (templates/_helpers.tpl, mandates.guardEnvKey) also refuses the datasource and Flyway
-      # URL keys and FINTECHBANKX_TLS_ENFORCE, in any case or relaxed-binding spelling, in
-      # `config` and in `extraEnv`. The only configtree the platform allows is one the chart
-      # itself renders on optional:configtree:/etc/fintechbankx/config/; this chart renders none.
+      # Governance round 3 (2b) and round 6 (guardrail 4a): no values override can move the
+      # service off the checked JDBC URL or switch its TLS assertion off. The name guard
+      # (templates/_helpers.tpl, mandates.refusedEnvName; the regexes of cicd-templates 2caa48f
+      # fbx.datasourceOverrideName, extended) normalises each `config` key and `extraEnv` name the
+      # way Spring's relaxed binding does (upper case, '.' and '-' read as '_') and refuses Spring
+      # datasource/Flyway/Liquibase/R2DBC properties, spring.application.json, jdbc_url, sslfactory,
+      # sslhostnameverifier, spring.config.{import,location,additional-location,name} (indexed and
+      # suffixed forms included), spring.profiles.{active,include,default,group}, fintechbankx.tls.*
+      # and spring.kafka.*security.protocol / spring.kafka.properties.*. The only configtree the
+      # platform allows is one the chart itself renders on optional:configtree:/etc/fintechbankx/config/;
+      # this chart renders none. The Kafka profile is the validated value kafka.profile.
       - name: Spring config redirection fails the render
         run: |
           chart=deploy/helm/payment-recurring-mandates-service
@@ -142,31 +148,183 @@ jobs:
             --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
             --set config.OIDC_TOKEN_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/token \
             --set config.ACCOUNTS_SERVICE_BASE_URL=http://accounts.ci:8080"
-          for key in SPRING_CONFIG_IMPORT spring_config_location Spring_Config_Additional_Location SPRING-CONFIG-IMPORT \
-                     SPRING_DATASOURCE_URL SPRING_FLYWAY_URL FINTECHBANKX_TLS_ENFORCE; do
+          refused_names="SPRING_CONFIG_IMPORT spring_config_location Spring_Config_Additional_Location SPRING-CONFIG-IMPORT \
+                     SPRING_CONFIG_IMPORT_0 SPRING_CONFIG_LOCATION_1 SPRING_CONFIG_ADDITIONAL_LOCATION_0 SPRING_CONFIG_IMPORT_ SPRING_CONFIG_NAME \
+                     SPRING_PROFILES_ACTIVE SPRING_PROFILES_INCLUDE SPRING_PROFILES_DEFAULT SPRING_PROFILES_ACTIVE_0 SPRING_PROFILES_INCLUDE_0 \
+                     SPRING_PROFILES_GROUP_KAFKA_MSK spring-profiles-group-kafka-msk SPRING_APPLICATION_JSON spring-application-json \
+                     SPRING_DATASOURCE_URL SPRING_DATASOURCE_HIKARI_JDBC_URL SPRING_DATASOURCE_HIKARI_JDBCURL SPRING_DATASOURCE_HIKARI_DATA_SOURCE_PROPERTIES_SSLFACTORY \
+                     SPRING_FLYWAY_URL SPRING_FLYWAY_USER SPRING_LIQUIBASE_URL SPRING_R2DBC_URL JDBC_URL REPORTING_JDBC_URL MY_SSLFACTORY MY_SSLHOSTNAMEVERIFIER \
+                     FINTECHBANKX_TLS_ENFORCE FINTECHBANKX_TLS_ENFORCE_0 fintechbankx-tls-enforce FINTECHBANKX_TLS_SOMETHING \
+                     SPRING_KAFKA_SECURITY_PROTOCOL SPRING_KAFKA_PRODUCER_SECURITY_PROTOCOL SPRING_KAFKA_CONSUMER_SECURITY_PROTOCOL \
+                     SPRING_KAFKA_PRODUCER_PROPERTIES_SECURITY_PROTOCOL SPRING_KAFKA_PROPERTIES_SECURITY_PROTOCOL SPRING_KAFKA_PROPERTIES_SASL_MECHANISM"
+          # Dotted spellings (helm --set needs the dots escaped).
+          refused_dotted='spring\.config\.import spring\.config\.import\.0 spring\.config\.name spring\.profiles\.active spring\.profiles\.default \
+                     spring\.profiles\.group\.kafka-msk spring\.application\.json spring\.datasource\.hikari\.jdbc-url spring\.flyway\.url \
+                     fintechbankx\.tls\.enforce spring\.kafka\.properties\.security\.protocol spring\.kafka\.producer\.security\.protocol'
+          for key in $refused_names $refused_dotted; do
             if helm template ci "$chart" $args --set-string "config.$key=optional:configtree:/etc/fintechbankx/config/" > /dev/null 2>&1; then
               echo "chart rendered config.$key" >&2; exit 1
             fi
-          done
-          if helm template ci "$chart" $args --set-string 'config.spring\.config\.import=optional:configtree:/etc/fintechbankx/config/' > /dev/null 2>&1; then
-            echo "chart rendered config.spring.config.import" >&2; exit 1
-          fi
-          for key in SPRING_CONFIG_IMPORT spring_config_location SPRING_DATASOURCE_URL FINTECHBANKX_TLS_ENFORCE; do
             if helm template ci "$chart" $args --set-string "extraEnv[0].name=$key" --set-string 'extraEnv[0].value=x' > /dev/null 2>&1; then
-              echo "chart rendered extraEnv $key" >&2; exit 1
+              echo "chart rendered extraEnv $key (value)" >&2; exit 1
+            fi
+            if helm template ci "$chart" $args --set-string "extraEnv[0].name=$key" \
+                 --set-string 'extraEnv[0].valueFrom.secretKeyRef.name=s' --set-string 'extraEnv[0].valueFrom.secretKeyRef.key=k' > /dev/null 2>&1; then
+              echo "chart rendered extraEnv $key (valueFrom)" >&2; exit 1
             fi
           done
-          # The local profile switches fintechbankx.tls.enforce off; the chart never activates it.
+          # The exception of the datasource rule: the credential keys the ExternalSecret materialises.
+          helm template ci "$chart" $args --show-only templates/deployment.yaml \
+            --set-string 'extraEnv[0].name=SPRING_DATASOURCE_USERNAME' --set-string 'extraEnv[0].value=x' | grep -q 'name: SPRING_DATASOURCE_USERNAME'
+          # The chart's own SPRING_PROFILES_ACTIVE comes from kafka.profile, validated against the
+          # Kafka profiles in the image; config.SPRING_PROFILES_ACTIVE is refused above in every spelling.
+          grep -q 'SPRING_PROFILES_ACTIVE: "kafka-msk"' <<<"$(helm template ci "$chart" $args)"
+          grep -q 'SPRING_PROFILES_ACTIVE: "kafka-strimzi"' <<<"$(helm template ci "$chart" $args --set kafka.profile=kafka-strimzi)"
+          for profile in local 'kafka-msk\,local' 'kafka-msk local' default '' 'kafka-msk\,kafka-strimzi'; do
+            if helm template ci "$chart" $args --set-string "kafka.profile=$profile" > /dev/null 2>&1; then
+              echo "chart rendered kafka.profile=$profile" >&2; exit 1
+            fi
+          done
           if helm template ci "$chart" $args --set-string 'config.SPRING_PROFILES_ACTIVE=kafka-msk\,local' > /dev/null 2>&1; then
             echo "chart rendered the local profile" >&2; exit 1
           fi
+          # KAFKA_SECURITY_PROTOCOL feeds spring.kafka.security.protocol; only the TLS protocols may be named.
+          for protocol in PLAINTEXT SASL_PLAINTEXT ''; do
+            if helm template ci "$chart" $args --set-string "config.KAFKA_SECURITY_PROTOCOL=$protocol" > /dev/null 2>&1; then
+              echo "chart rendered KAFKA_SECURITY_PROTOCOL=$protocol" >&2; exit 1
+            fi
+          done
+          helm template ci "$chart" $args --set-string config.KAFKA_SECURITY_PROTOCOL=SSL > /dev/null
           # The chart itself renders no SPRING_CONFIG_* setting; a harmless extraEnv entry still reaches the API pods.
           if grep -qi 'SPRING_CONFIG' <<<"$(helm template ci "$chart" $args)"; then
             echo "the chart renders a SPRING_CONFIG_* setting" >&2; exit 1
           fi
           helm template ci "$chart" $args --show-only templates/deployment.yaml \
-            --set-string 'extraEnv[0].name=JAVA_TOOL_OPTIONS' --set-string 'extraEnv[0].value=-XX:MaxRAMPercentage=70' \
+            --set-string 'extraEnv[0].name=FEATURE_X' --set-string 'extraEnv[0].value=on' | grep -q 'name: FEATURE_X'
+
+      # Round 6, payments review: Kubernetes `env` wins over the ConfigMap's envFrom, so extraEnv may
+      # not carry DB_URL (value or valueFrom). JVM option variables need a literal value, checked by
+      # mandates.validateJvmOptions (cicd-templates 2caa48f fbx.validateJvmOptions plus fintechbankx and kafka).
+      - name: extraEnv cannot replace the JDBC URL or steer the JVM past the checks
+        run: |
+          chart=deploy/helm/payment-recurring-mandates-service
+          args="--namespace payments \
+            --set image.repository=ci/payment-recurring-mandates-service --set image.tag=${{ github.sha }} \
+            --set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
+            --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client \
+            --set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration \
+            --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem \
+            --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
+            --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
+            --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
+            --set config.OIDC_TOKEN_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/token \
+            --set config.ACCOUNTS_SERVICE_BASE_URL=http://accounts.ci:8080"
+          good='jdbc:postgresql://db.ci:5432/db?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem'
+          for name in DB_URL db_url Db-Url; do
+            if helm template ci "$chart" $args --set-string "extraEnv[0].name=$name" --set-string "extraEnv[0].value=$good" > /dev/null 2>&1; then
+              echo "chart rendered extraEnv $name with a value" >&2; exit 1
+            fi
+            if helm template ci "$chart" $args --set-string "extraEnv[0].name=$name" \
+                 --set-string 'extraEnv[0].valueFrom.secretKeyRef.name=s' --set-string 'extraEnv[0].valueFrom.secretKeyRef.key=k' > /dev/null 2>&1; then
+              echo "chart rendered extraEnv $name with valueFrom" >&2; exit 1
+            fi
+          done
+          for jvm in JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS; do
+            for value in '-Dfintechbankx.tls.enforce=false' '-Dspring.datasource.url=jdbc:postgresql://x/y' '-Dspring.kafka.security.protocol=PLAINTEXT' \
+                         '-Dspring.kafka.properties.security.protocol=PLAINTEXT' '-Djavax.net.ssl.trustStore=/tmp/x' '-Dspring.profiles.active=local' \
+                         '-Dspring.config.import=optional:configtree:/tmp/' '-Dspring.application.json={}' '@/tmp/opts' '-XX:MaxRAMPercentage=70 @/tmp/opts' \
+                         '-XX:VMOptionsFile=/tmp/opts' '-XX:Flags=/tmp/flags' '-DFINTECHBANKX_TLS_ENFORCE=false' '-Dspring.flyway.url=x'; do
+              if helm template ci "$chart" $args --set-string "extraEnv[0].name=$jvm" --set-string "extraEnv[0].value=$value" > /dev/null 2>&1; then
+                echo "chart rendered extraEnv $jvm=$value" >&2; exit 1
+              fi
+              if helm template ci "$chart" $args --set-string "config.$jvm=$value" > /dev/null 2>&1; then
+                echo "chart rendered config.$jvm=$value" >&2; exit 1
+              fi
+            done
+            if helm template ci "$chart" $args --set-string "extraEnv[0].name=$jvm" \
+                 --set-string 'extraEnv[0].valueFrom.configMapKeyRef.name=c' --set-string 'extraEnv[0].valueFrom.configMapKeyRef.key=k' > /dev/null 2>&1; then
+              echo "chart rendered extraEnv $jvm from valueFrom" >&2; exit 1
+            fi
+          done
+          # A JVM option that steers nothing the checks cover still renders.
+          helm template ci "$chart" $args --show-only templates/deployment.yaml \
+            --set-string 'extraEnv[0].name=JAVA_TOOL_OPTIONS' --set-string 'extraEnv[0].value=-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError' \
             | grep -q 'name: JAVA_TOOL_OPTIONS'
+
+      # Round 6: every PostgreSQL JDBC URL in values (config.DB_URL, any other config value, any
+      # extraEnv value) is parsed the way PgJDBC reads it (mandates.validateJdbcUrl, ported from
+      # cicd-templates 2caa48f fbx.validateJdbcUrl), not searched for a substring: one lower-case
+      # sslmode=verify-full, one sslrootcert equal to the mounted bundle, no sslfactory, sslfactoryarg,
+      # sslhostnameverifier, sslpasswordcallback or service, no percent-encoded '=' or '&', no TLS
+      # key before the '?', and plain [A-Za-z0-9_.-] parameter names.
+      - name: JDBC URLs are parsed strictly
+        run: |
+          chart=deploy/helm/payment-recurring-mandates-service
+          args="--namespace payments \
+            --set image.repository=ci/payment-recurring-mandates-service --set image.tag=${{ github.sha }} \
+            --set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
+            --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client \
+            --set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration \
+            --set-string config.DB_URL=jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem \
+            --set config.KAFKA_BOOTSTRAP_SERVERS=kafka.ci:9098 \
+            --set config.OIDC_ISSUER_URI=https://idp.ci/realms/fintechbankx \
+            --set config.OIDC_JWK_SET_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs \
+            --set config.OIDC_TOKEN_URI=https://idp.ci/realms/fintechbankx/protocol/openid-connect/token \
+            --set config.ACCOUNTS_SERVICE_BASE_URL=http://accounts.ci:8080"
+          ca=/etc/fintechbankx/rds-ca/global-bundle.pem
+          base=jdbc:postgresql://db.ci:5432/db
+          refused_urls=(
+            "$base?sslmode=verify-full&sslrootcert=$ca&sslmode=disable"                      # a later sslmode wins in PgJDBC
+            "$base?sslmode=disable&sslmode=verify-full&sslrootcert=$ca"                      # an earlier one: still two
+            "$base?sslrootcert=/tmp/decoy.pem&sslmode=verify-full&sslrootcert=$ca"          # decoy sslrootcert before the real one
+            "$base?sslmode=verify-full&sslrootcert=$ca&sslrootcert=/tmp/decoy.pem"
+            "$base?sslmode=verify-full&sslrootcert=$ca&sslfactory=org.postgresql.ssl.NonValidatingFactory"
+            "$base?sslmode=verify-full&sslrootcert=$ca&sslfactoryarg=x"
+            "$base?sslmode=verify-full&sslrootcert=$ca&sslhostnameverifier=x.Y"
+            "$base?sslmode=verify-full&sslrootcert=$ca&sslpasswordcallback=x"
+            "$base?sslmode=verify-full&sslrootcert=$ca&service=prod"
+            "$base?sslmode=require&applicationName=sslmode=verify-full&sslrootcert=$ca"      # substring decoy inside another value
+            "$base?SSLMODE=verify-full&sslrootcert=$ca"                                      # PgJDBC ignores upper case: effective sslmode is the default
+            "$base?SslMode=verify-full&sslrootcert=$ca"
+            "$base?sslmode=verify-full&SSLROOTCERT=$ca"
+            "$base?sslmode=VERIFY-FULL&sslrootcert=$ca"
+            "jdbc:postgresql://db.ci:5432/db&sslmode=disable?sslmode=verify-full&sslrootcert=$ca"   # a TLS key before the '?'
+            "jdbc:postgresql://db.ci:5432/db;sslfactory=x?sslmode=verify-full&sslrootcert=$ca"
+            "$base?sslmode=verify-full&sslrootcert=$ca&x=a%3Db"                              # percent-encoded '='
+            "$base?sslmode=verify-full%26sslmode=disable&sslrootcert=$ca"                   # percent-encoded '&'
+            "$base?ssl%6Dode=disable&sslmode=verify-full&sslrootcert=$ca"                    # a parameter name that is not plain
+            "$base?sslmode=verify-full&sslrootcert=/etc/ssl/rds/global-bundle.pem"
+            "$base?sslmode=verify-full"
+            "$base?sslmode=verify-ca&sslrootcert=$ca"
+            "$base?sslmode=require"
+            "$base"
+            "jdbc:postgresql://db.ci:5432/db?sslmode=verify-full&sslrootcert=$ca&"           # fine for PgJDBC; kept as a positive below
+          )
+          unset 'refused_urls[-1]'
+          for url in "${refused_urls[@]}"; do
+            if helm template ci "$chart" $args --set-string "config.DB_URL=$url" > /dev/null 2>&1; then
+              echo "chart rendered config.DB_URL=$url" >&2; exit 1
+            fi
+          done
+          # The same parser applies to every other PostgreSQL URL a value can carry.
+          for url in "$base?sslmode=require" "$base?sslmode=verify-full&sslrootcert=$ca&sslfactory=org.postgresql.ssl.NonValidatingFactory" \
+                     "jdbc:p6spy:postgresql://db.ci:5432/db?sslmode=verify-full&sslrootcert=$ca&sslmode=disable" \
+                     " $base?SSLMODE=verify-full&sslrootcert=$ca"; do
+            if helm template ci "$chart" $args --set-string "config.REPORTING_DB_URL=$url" > /dev/null 2>&1; then
+              echo "chart rendered config.REPORTING_DB_URL=$url" >&2; exit 1
+            fi
+            if helm template ci "$chart" $args --set-string 'extraEnv[0].name=REPORTING_URL' --set-string "extraEnv[0].value=$url" > /dev/null 2>&1; then
+              echo "chart rendered extraEnv REPORTING_URL=$url" >&2; exit 1
+            fi
+          done
+          if helm template ci "$chart" $args --set-string "config.DB_URL=jdbc:mysql://db.ci:3306/db?sslMode=VERIFY_IDENTITY" > /dev/null 2>&1; then
+            echo "chart rendered a DB_URL that is not a PostgreSQL URL" >&2; exit 1
+          fi
+          # Accepted: the parameters in either order, a trailing '&', other plain parameters.
+          for url in "$base?sslrootcert=$ca&sslmode=verify-full" "$base?sslmode=verify-full&sslrootcert=$ca&" \
+                     "$base?sslmode=verify-full&sslrootcert=$ca&ApplicationName=mandates&reWriteBatchedInserts=true"; do
+            helm template ci "$chart" $args --set-string "config.DB_URL=$url" > /dev/null
+          done
 
   terraform:
     name: deploy/terraform

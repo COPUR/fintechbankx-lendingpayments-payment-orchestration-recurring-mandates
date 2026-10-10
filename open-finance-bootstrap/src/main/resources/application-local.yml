@@ -1,6 +1,8 @@
 # Local runs only (SPRING_PROFILES_ACTIVE=local): a plain PostgreSQL on localhost
 # and no Kafka TLS, so the startup TLS assertion is off. This profile never
-# reaches a cluster: the chart refuses it in SPRING_PROFILES_ACTIVE.
+# reaches a cluster: the chart renders SPRING_PROFILES_ACTIVE from kafka.profile
+# (kafka-msk or kafka-strimzi only) and refuses every spring.profiles.* name and
+# every JVM option that could activate another profile.
 fintechbankx:
   tls:
     enforce: false
