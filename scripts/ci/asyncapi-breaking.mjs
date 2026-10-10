@@ -234,7 +234,7 @@ function main() {
     }
   }
   if (failed > 0) {
-    console.error(`asyncapi breaking check failed: ${failed} finding(s). Publish a new major version on a new topic (.v2) with dual-publish, or list accepted findings in ${dir}/<spec-name>.accepted-breaking.txt.`);
+    console.error(`asyncapi breaking check failed: ${failed} finding(s). Publish a new event major (eventType ...v2) on the same aggregate topic alongside the old one, or a new topic major for key, partition or cleanup changes (ADR-019), or list accepted findings in ${dir}/<spec-name>.accepted-breaking.txt.`);
     process.exit(1);
   }
   console.log('asyncapi breaking check passed');
