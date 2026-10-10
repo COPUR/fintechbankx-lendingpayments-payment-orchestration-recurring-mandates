@@ -1,0 +1,3 @@
+# Startup TLS assertion for every Spring application of this service (API pods, migration Job, tests).
+org.springframework.context.ApplicationContextInitializer=\
+com.enterprise.openfinance.recurringpayments.infrastructure.config.TlsEnforcementInitializer

@@ -141,6 +141,15 @@ management:
     tracing:
       endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.observability.svc.cluster.local:4318/v1/traces}
 
+fintechbankx:
+  tls:
+    # Startup TLS assertion (TlsEnforcementInitializer): the service does not start
+    # unless spring.datasource.url carries sslmode=verify-full and, when a Kafka
+    # client is configured, its security.protocol is SASL_SSL. Only the local
+    # profile and the test resources set this false; the chart refuses the
+    # FINTECHBANKX_TLS_ENFORCE key and the local profile.
+    enforce: true
+
 openfinance:
   recurringpayments:
     cache:

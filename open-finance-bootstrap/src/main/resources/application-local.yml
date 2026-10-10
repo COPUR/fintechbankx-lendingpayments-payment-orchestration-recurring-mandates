@@ -1,0 +1,6 @@
+# Local runs only (SPRING_PROFILES_ACTIVE=local): a plain PostgreSQL on localhost
+# and no Kafka TLS, so the startup TLS assertion is off. This profile never
+# reaches a cluster: the chart refuses it in SPRING_PROFILES_ACTIVE.
+fintechbankx:
+  tls:
+    enforce: false
