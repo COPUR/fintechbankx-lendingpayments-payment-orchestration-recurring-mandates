@@ -406,6 +406,34 @@ jobs:
           assert "SPRING_CONFIG_IMPORT" not in keys, keys
           assert cm["data"]["HARMLESS"].startswith("x\n"), cm["data"]["HARMLESS"]
           PY
+          # The CA mount path is interpolated into the pod env (DB_SSL_ROOT_CERT) and the DB_URL must name it:
+          # a quote and a newline in it (which the guard accepts when DB_URL names the same path) must stay inside one env value, so the
+          # Deployment and the Job carry exactly the chart's own env names (no profile, no datasource URL).
+          python - "$tmp/ca.yaml" "$tmp/ca-url.txt" <<'PY'
+          import json, sys
+          mp = '/etc/fintechbankx/rds-ca"\n            - name: SPRING_PROFILES_ACTIVE\n              value: "local'
+          url = "jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=" + mp + "/global-bundle.pem"
+          json.dump({"rdsCaBundle": {"mountPath": mp}}, open(sys.argv[1], "w"))
+          open(sys.argv[2], "w").write(url)
+          PY
+          # --set-file is applied after --set-string, so this DB_URL replaces the one in $args and names the
+          # same CA path; the guard accepts it, which is the case the quoting has to hold.
+          helm template ci "$chart" $args -f "$tmp/ca.yaml" --set-file "config.DB_URL=$tmp/ca-url.txt" > "$tmp/ca.out"
+          python - "$tmp/ca.out" <<'PY'
+          import sys, yaml
+          own = {"Deployment": ["SPRING_FLYWAY_ENABLED", "DB_SSL_ROOT_CERT"]}
+          seen = set()
+          for doc in yaml.safe_load_all(open(sys.argv[1])):
+              if not doc or doc.get("kind") not in ("Deployment", "Job"):
+                  continue
+              seen.add(doc["kind"])
+              for c in doc["spec"]["template"]["spec"]["containers"]:
+                  names = [e["name"] for e in c.get("env", [])]
+                  assert "SPRING_PROFILES_ACTIVE" not in names and "SPRING_DATASOURCE_URL" not in names, (doc["kind"], names)
+                  if doc["kind"] in own:
+                      assert names == own[doc["kind"]], (doc["kind"], names)
+          assert seen == {"Deployment", "Job"}, seen
+          PY
           # extraEnv names and the ExternalSecret key shapes: not a Kubernetes key, not rendered.
           if helm template ci "$chart" $args --set-string 'extraEnv[0].name=FOO BAR' --set-string 'extraEnv[0].value=x' > /dev/null 2>&1; then
             echo "chart rendered an extraEnv name with white space" >&2; exit 1
