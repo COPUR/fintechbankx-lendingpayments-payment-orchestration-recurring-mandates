@@ -15,13 +15,16 @@ info:
 
 
     Implementation: MandateEventEnvelopeFactory writes these envelopes to the transactional outbox (sc_pay_recurring_mandates.mandate_outbox_event)
-    in the mandate transaction; OutboxRelay publishes them with the mandate id as record key. aggregateVersion is the mandate
+    in the mandate transaction; OutboxRelay publishes every one to the aggregate topic `evt.pay.mandate.v1` with record key
+    = aggregateId (the mandate id) and the eventType, eventId, correlationId and x-fapi-interaction-id record headers
+    (traceparent when the request was traced), ADR-019. aggregateVersion is the mandate
     version after the change (0 on creation, +1 per revocation or accepted payment), so consumers can detect gaps per mandate.
     Money is a decimal string.
 
 
-    Every message uses the standard envelope (common/event-envelope.yaml). Topics use cleanup.policy=delete. Adding an optional
-    field is a minor change; any removal, rename or type change is a new major version on a new topic with dual-publish.'
+    Every message uses the standard envelope (common/event-envelope.yaml). The topic uses cleanup.policy=delete. Adding an
+    optional field or a new event type is a minor change; a removal, rename or type change in one event is a new event
+    major (eventType ...v2) published on the same topic alongside the old one until consumers move.'
   tags:
   - name: payments
   - name: evt.pay.mandate
@@ -51,50 +54,23 @@ servers:
     security:
     - $ref: '#/components/securitySchemes/mtls'
 channels:
-  created:
-    address: evt.pay.mandate.created.v1
-    title: evt.pay.mandate.created.v1
-    description: Payments.Mandate.Created.v1. A TPP's variable recurring payment mandate was authorised (status AUTHORISED,
-      version 0).
-    bindings:
-      kafka:
-        topic: evt.pay.mandate.created.v1
-        partitions: 3
-        replicas: 3
-        topicConfiguration:
-          cleanup.policy:
-          - delete
-          retention.ms: 604800000
-          max.message.bytes: 1048576
-        bindingVersion: 0.5.0
+  mandate:
+    address: evt.pay.mandate.v1
+    title: evt.pay.mandate.v1
+    description: 'Every event of the mandate aggregate, keyed by aggregateId (the mandate id) so that the events of one
+      mandate stay in order in one partition (ADR-019, one topic per aggregate). The eventType record header names the
+      event: Payments.Mandate.Created.v1, Payments.Mandate.Revoked.v1, Payments.Mandate.PaymentAccepted.v1. Consumers
+      skip event types they do not handle.'
     messages:
       MandateCreated:
         $ref: '#/components/messages/MandateCreated'
-  revoked:
-    address: evt.pay.mandate.revoked.v1
-    title: evt.pay.mandate.revoked.v1
-    description: Payments.Mandate.Revoked.v1. The mandate was revoked; no further collections are accepted under it.
-    bindings:
-      kafka:
-        topic: evt.pay.mandate.revoked.v1
-        partitions: 3
-        replicas: 3
-        topicConfiguration:
-          cleanup.policy:
-          - delete
-          retention.ms: 604800000
-          max.message.bytes: 1048576
-        bindingVersion: 0.5.0
-    messages:
       MandateRevoked:
         $ref: '#/components/messages/MandateRevoked'
-  paymentAccepted:
-    address: evt.pay.mandate.payment-accepted.v1
-    title: evt.pay.mandate.payment-accepted.v1
-    description: Payments.Mandate.PaymentAccepted.v1. A collection under the mandate was accepted within the monthly limit.
+      MandatePaymentAccepted:
+        $ref: '#/components/messages/MandatePaymentAccepted'
     bindings:
       kafka:
-        topic: evt.pay.mandate.payment-accepted.v1
+        topic: evt.pay.mandate.v1
         partitions: 3
         replicas: 3
         topicConfiguration:
@@ -103,34 +79,31 @@ channels:
           retention.ms: 604800000
           max.message.bytes: 1048576
         bindingVersion: 0.5.0
-    messages:
-      MandatePaymentAccepted:
-        $ref: '#/components/messages/MandatePaymentAccepted'
 operations:
   publishMandateCreated:
     action: send
     title: Publish Payments.Mandate.Created.v1
     summary: svc-pay-recurring-mandates publishes Payments.Mandate.Created.v1 through its transactional outbox.
     channel:
-      $ref: '#/channels/created'
+      $ref: '#/channels/mandate'
     messages:
-    - $ref: '#/channels/created/messages/MandateCreated'
+    - $ref: '#/channels/mandate/messages/MandateCreated'
   publishMandateRevoked:
     action: send
     title: Publish Payments.Mandate.Revoked.v1
     summary: svc-pay-recurring-mandates publishes Payments.Mandate.Revoked.v1 through its transactional outbox.
     channel:
-      $ref: '#/channels/revoked'
+      $ref: '#/channels/mandate'
     messages:
-    - $ref: '#/channels/revoked/messages/MandateRevoked'
+    - $ref: '#/channels/mandate/messages/MandateRevoked'
   publishMandatePaymentAccepted:
     action: send
     title: Publish Payments.Mandate.PaymentAccepted.v1
     summary: svc-pay-recurring-mandates publishes Payments.Mandate.PaymentAccepted.v1 through its transactional outbox.
     channel:
-      $ref: '#/channels/paymentAccepted'
+      $ref: '#/channels/mandate'
     messages:
-    - $ref: '#/channels/paymentAccepted/messages/MandatePaymentAccepted'
+    - $ref: '#/channels/mandate/messages/MandatePaymentAccepted'
 components:
   schemas:
     EventEnvelope:
@@ -241,7 +214,12 @@ components:
       summary: A TPP's variable recurring payment mandate was authorised (status AUTHORISED, version 0).
       contentType: application/json
       headers:
-        $ref: '#/components/schemas/EventHeaders'
+        allOf:
+        - $ref: '#/components/schemas/EventHeaders'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.Created.v1
       payload:
         allOf:
         - $ref: '#/components/schemas/EventEnvelope'
@@ -268,7 +246,12 @@ components:
       summary: The mandate was revoked; no further collections are accepted under it.
       contentType: application/json
       headers:
-        $ref: '#/components/schemas/EventHeaders'
+        allOf:
+        - $ref: '#/components/schemas/EventHeaders'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.Revoked.v1
       payload:
         allOf:
         - $ref: '#/components/schemas/EventEnvelope'
@@ -295,7 +278,12 @@ components:
       summary: A collection under the mandate was accepted within the monthly limit.
       contentType: application/json
       headers:
-        $ref: '#/components/schemas/EventHeaders'
+        allOf:
+        - $ref: '#/components/schemas/EventHeaders'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.PaymentAccepted.v1
       payload:
         allOf:
         - $ref: '#/components/schemas/EventEnvelope'

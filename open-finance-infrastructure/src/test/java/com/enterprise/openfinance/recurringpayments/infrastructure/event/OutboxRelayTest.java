@@ -1,6 +1,8 @@
 package com.enterprise.openfinance.recurringpayments.infrastructure.event;
 
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateCreated;
 import com.enterprise.openfinance.recurringpayments.domain.event.MandateEvent;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted;
 import com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked;
 import com.enterprise.openfinance.recurringpayments.infrastructure.observability.CorrelationIdFilter;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -53,29 +55,51 @@ class OutboxRelayTest {
     }
 
     @Test
-    void publishesPendingRowsWithKeyAndHeaders() {
-        OutboxEventJpaEntity row = row("CONS-1");
+    @SuppressWarnings("unchecked")
+    void publishesEveryMandateEventToTheAggregateTopicWithKeyAndHeaders() throws Exception {
+        List<MandateEvent> events = List.of(
+                new MandateCreated(UUID.randomUUID(), "CONS-1", 0L, NOW, "TPP-001", "PSU-001",
+                        new java.math.BigDecimal("5000.00"), "AED", Instant.parse("2099-01-01T00:00:00Z"), false),
+                new MandatePaymentAccepted(UUID.randomUUID(), "CONS-1", 1L, NOW, "PAY-1", "TPP-001",
+                        new java.math.BigDecimal("10.00"), "AED", "2026-02", new java.math.BigDecimal("10.00")),
+                new MandateRevoked(UUID.randomUUID(), "CONS-1", 2L, NOW, "TPP-001", "x"));
+        List<OutboxEventJpaEntity> rows = events.stream().map(e -> envelopes.toOutboxRow(e, "ix-relay")).toList();
         when(outbox.tryRelayLock(OutboxRelay.RELAY_LOCK_KEY)).thenReturn(true);
-        when(outbox.findUnpublishedBatch(100)).thenReturn(List.of(row));
+        when(outbox.findUnpublishedBatch(100)).thenReturn(rows);
         when(kafka.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(null));
 
-        assertThat(relay().relayOnce()).isEqualTo(1);
+        assertThat(relay().relayOnce()).isEqualTo(3);
 
-        assertThat(row.getPublishedAt()).isEqualTo(NOW);
-        assertThat(row.getAttempts()).isEqualTo(1);
-        ProducerRecord<String, String> record = OutboxRelay.toRecord(row);
-        assertThat(record.key()).isEqualTo("CONS-1");
-        assertThat(record.topic()).isEqualTo("evt.pay.mandate.revoked.v1");
-        assertThat(new String(record.headers().lastHeader("eventType").value(), StandardCharsets.UTF_8))
-                .isEqualTo("Payments.Mandate.Revoked.v1");
-        assertThat(new String(record.headers().lastHeader("x-fapi-interaction-id").value(), StandardCharsets.UTF_8))
-                .isEqualTo("ix-relay");
-        assertThat(record.headers().lastHeader("traceparent")).isNull();
+        ArgumentCaptor<ProducerRecord<String, String>> sent = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(kafka, org.mockito.Mockito.times(3)).send(sent.capture());
+        com.fasterxml.jackson.databind.ObjectMapper json = JsonMapper.builder().build();
+        for (int i = 0; i < rows.size(); i++) {
+            ProducerRecord<String, String> record = sent.getAllValues().get(i);
+            OutboxEventJpaEntity row = rows.get(i);
+            com.fasterxml.jackson.databind.JsonNode envelope = json.readTree(record.value());
+            assertThat(row.getPublishedAt()).isEqualTo(NOW);
+            assertThat(row.getAttempts()).isEqualTo(1);
+            assertThat(record.topic()).as("one topic per aggregate (ADR-019)").isEqualTo("evt.pay.mandate.v1");
+            assertThat(record.key()).isEqualTo("CONS-1").isEqualTo(envelope.get("aggregateId").asText());
+            assertThat(header(record, "eventType")).isEqualTo(envelope.get("eventType").asText())
+                    .isEqualTo(row.getEventType());
+            assertThat(header(record, "eventId")).isEqualTo(envelope.get("eventId").asText());
+            assertThat(header(record, "correlationId")).isEqualTo(envelope.get("correlationId").asText())
+                    .isEqualTo("ix-relay");
+            assertThat(header(record, "x-fapi-interaction-id")).isEqualTo("ix-relay");
+            assertThat(record.headers().lastHeader("traceparent")).isNull();
+        }
+        assertThat(sent.getAllValues()).extracting(r -> header(r, "eventType")).containsExactly(
+                "Payments.Mandate.Created.v1", "Payments.Mandate.PaymentAccepted.v1", "Payments.Mandate.Revoked.v1");
 
         OutboxEventJpaEntity traced = envelopes.toOutboxRow(new MandateRevoked(UUID.randomUUID(), "CONS-1", 1L, NOW,
                 "TPP-001", "x"), "ix-relay", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
-        assertThat(new String(OutboxRelay.toRecord(traced).headers().lastHeader("traceparent").value(), StandardCharsets.UTF_8))
+        assertThat(header(OutboxRelay.toRecord(traced), "traceparent"))
                 .isEqualTo("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01");
+    }
+
+    private static String header(ProducerRecord<String, String> record, String name) {
+        return new String(record.headers().lastHeader(name).value(), StandardCharsets.UTF_8);
     }
 
     @Test
@@ -186,7 +210,7 @@ class OutboxRelayTest {
     void authAndUnclassifiedFailuresNeverParkStopTheBatchAndMarkNothing() {
         List<RuntimeException> blocking = List.of(
                 new org.apache.kafka.common.errors.SaslAuthenticationException("IAM auth failed"),
-                new org.apache.kafka.common.errors.TopicAuthorizationException(java.util.Set.of("evt.pay.mandate.revoked.v1")),
+                new org.apache.kafka.common.errors.TopicAuthorizationException(java.util.Set.of("evt.pay.mandate.v1")),
                 new org.apache.kafka.common.KafkaException("Failed to construct kafka producer"),
                 new IllegalStateException("anything else"));
         for (RuntimeException failure : blocking) {

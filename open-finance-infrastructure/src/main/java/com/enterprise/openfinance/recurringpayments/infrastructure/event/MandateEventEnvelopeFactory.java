@@ -13,15 +13,14 @@ import java.util.Map;
 
 /**
  * Turns mandate domain events into the public envelope of
- * api/asyncapi/svc-pay-recurring-mandates.yaml: topic
- * evt.pay.mandate.&lt;event&gt;.v1, eventType Payments.Mandate.&lt;Event&gt;.v1,
- * money as decimal strings, ids and facts only.
+ * api/asyncapi/svc-pay-recurring-mandates.yaml: eventType
+ * Payments.Mandate.&lt;Event&gt;.v1, money as decimal strings, ids and facts
+ * only. OutboxRelay sends every one to the aggregate topic evt.pay.mandate.v1.
  */
 public class MandateEventEnvelopeFactory {
 
     public static final String PRODUCER = "svc-pay-recurring-mandates";
     public static final String AGGREGATE_TYPE = "Mandate";
-    public static final String TOPIC_PREFIX = "evt.pay.mandate.";
 
     private final ObjectMapper objectMapper;
 
@@ -52,12 +51,12 @@ public class MandateEventEnvelopeFactory {
         envelope.put("data", mapped.data());
 
         return new OutboxEventJpaEntity(event.eventId(), AGGREGATE_TYPE, event.mandateId(), event.aggregateVersion(),
-                mapped.eventType(), mapped.topic(), toJson(envelope), correlationId, event.occurredAt(), traceparent);
+                mapped.eventType(), toJson(envelope), correlationId, event.occurredAt(), traceparent);
     }
 
     static PublicEvent map(MandateEvent event) {
         return switch (event) {
-            case MandateCreated e -> new PublicEvent("created", "Created", data(
+            case MandateCreated e -> new PublicEvent("Created", data(
                     "mandateId", e.mandateId(),
                     "tppId", e.tppId(),
                     "psuId", e.psuId(),
@@ -65,12 +64,12 @@ public class MandateEventEnvelopeFactory {
                     "periodType", "Month",
                     "expiresAt", e.expiresAt().toString(),
                     "debtorAccountLinked", e.debtorAccountLinked()));
-            case MandateRevoked e -> new PublicEvent("revoked", "Revoked", data(
+            case MandateRevoked e -> new PublicEvent("Revoked", data(
                     "mandateId", e.mandateId(),
                     "tppId", e.tppId(),
                     "reason", e.reason(),
                     "revokedAt", e.occurredAt().toString()));
-            case MandatePaymentAccepted e -> new PublicEvent("payment-accepted", "PaymentAccepted", data(
+            case MandatePaymentAccepted e -> new PublicEvent("PaymentAccepted", data(
                     "mandateId", e.mandateId(),
                     "paymentId", e.paymentId(),
                     "tppId", e.tppId(),
@@ -100,11 +99,7 @@ public class MandateEventEnvelopeFactory {
         }
     }
 
-    record PublicEvent(String topicSuffix, String eventName, Map<String, Object> data) {
-        String topic() {
-            return TOPIC_PREFIX + topicSuffix + ".v1";
-        }
-
+    record PublicEvent(String eventName, Map<String, Object> data) {
         String eventType() {
             return "Payments.Mandate." + eventName + ".v1";
         }

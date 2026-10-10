@@ -12,7 +12,8 @@ import java.util.UUID;
 
 /**
  * Row of sc_pay_recurring_mandates.mandate_outbox_event: one envelope waiting to be
- * relayed to Kafka. Written in the mandate's transaction. A parked row
+ * relayed to Kafka. Written in the mandate's transaction. The row stores no
+ * topic: the relay sends every row to the aggregate topic (V8). A parked row
  * (parked_at set) is skipped by the relay until an operator replays it; see
  * OutboxRelay for when a row is parked.
  */
@@ -37,9 +38,6 @@ public class OutboxEventJpaEntity {
 
     @Column(name = "event_type", nullable = false, length = 128, updatable = false)
     private String eventType;
-
-    @Column(name = "topic", nullable = false, length = 249, updatable = false)
-    private String topic;
 
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payload", nullable = false, updatable = false, columnDefinition = "jsonb")
@@ -78,14 +76,13 @@ public class OutboxEventJpaEntity {
     }
 
     public OutboxEventJpaEntity(UUID eventId, String aggregateType, String aggregateId, long aggregateVersion,
-                                String eventType, String topic, String payload, String correlationId,
+                                String eventType, String payload, String correlationId,
                                 Instant occurredAt, String traceparent) {
         this.eventId = eventId;
         this.aggregateType = aggregateType;
         this.aggregateId = aggregateId;
         this.aggregateVersion = aggregateVersion;
         this.eventType = eventType;
-        this.topic = topic;
         this.payload = payload;
         this.correlationId = correlationId;
         this.occurredAt = occurredAt;
@@ -97,7 +94,6 @@ public class OutboxEventJpaEntity {
     public String getAggregateId() { return aggregateId; }
     public long getAggregateVersion() { return aggregateVersion; }
     public String getEventType() { return eventType; }
-    public String getTopic() { return topic; }
     public String getPayload() { return payload; }
     public String getCorrelationId() { return correlationId; }
     public Instant getOccurredAt() { return occurredAt; }

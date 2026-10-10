@@ -67,7 +67,7 @@ public class OutboxConfiguration {
     /**
      * The relay runs in every replica; the advisory lock lets only one of them
      * publish at a time. Off by default (mandates.outbox.relay.enabled) until
-     * the evt.pay.mandate topics exist on the platform cluster; events wait in
+     * the evt.pay.mandate.v1 topic exists on the platform cluster; events wait in
      * the outbox meanwhile.
      */
     @Configuration

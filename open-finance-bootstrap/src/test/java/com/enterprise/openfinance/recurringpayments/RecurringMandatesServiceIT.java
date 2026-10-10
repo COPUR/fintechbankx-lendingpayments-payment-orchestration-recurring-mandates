@@ -465,7 +465,8 @@ class RecurringMandatesServiceIT {
 
         when(kafka.send(any(ProducerRecord.class))).thenAnswer(invocation -> {
             ProducerRecord<String, String> record = invocation.getArgument(0);
-            if (record.key().equals(first) && record.topic().endsWith(".created.v1")) {
+            if (record.key().equals(first) && "Payments.Mandate.Created.v1".equals(
+                    new String(record.headers().lastHeader("eventType").value(), java.nio.charset.StandardCharsets.UTF_8))) {
                 return CompletableFuture.failedFuture(
                         new org.apache.kafka.common.errors.RecordTooLargeException("The message is 2000000 bytes"));
             }
@@ -492,9 +493,13 @@ class RecurringMandatesServiceIT {
         Mockito.verify(kafka, Mockito.times(2)).send(records.capture());
         List<String> delivered = new ArrayList<>();
         for (ProducerRecord<String, String> r : records.getAllValues()) {
-            delivered.add(r.key().equals(first) ? "first:" + r.topic() : "second:" + r.topic());
+            String eventType = new String(r.headers().lastHeader("eventType").value(), java.nio.charset.StandardCharsets.UTF_8);
+            delivered.add((r.key().equals(first) ? "first:" : "second:") + r.topic() + ":" + eventType);
         }
-        assertThat(delivered).containsExactly("first:evt.pay.mandate.created.v1", "second:evt.pay.mandate.created.v1");
+        assertThat(delivered).containsExactly("first:evt.pay.mandate.v1:Payments.Mandate.Created.v1",
+                "second:evt.pay.mandate.v1:Payments.Mandate.Created.v1");
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_outbox_event where topic is not null",
+                Integer.class)).as("the relay computes the topic; rows no longer store one (V8)").isZero();
 
         // Runbook replay: un-park the event; it and then the held-back event go out in order.
         PostgresTestDatabase.owner().update("update " + SCHEMA + ".mandate_outbox_event"

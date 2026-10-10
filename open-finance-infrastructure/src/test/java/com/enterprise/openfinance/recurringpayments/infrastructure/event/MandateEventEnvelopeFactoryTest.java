@@ -23,11 +23,10 @@ class MandateEventEnvelopeFactoryTest {
     private final MandateEventEnvelopeFactory factory = new MandateEventEnvelopeFactory(json);
 
     @Test
-    void createdEventBecomesTheStandardEnvelopeOnTheCreatedTopic() throws Exception {
+    void createdEventBecomesTheStandardEnvelope() throws Exception {
         OutboxEventJpaEntity row = factory.toOutboxRow(new MandateCreated(EVENT_ID, "CONS-1", 0L, AT, "TPP-001",
                 "PSU-001", new BigDecimal("5000.00"), "AED", Instant.parse("2099-01-01T00:00:00Z"), true), "ix-1");
 
-        assertThat(row.getTopic()).isEqualTo("evt.pay.mandate.created.v1");
         assertThat(row.getEventType()).isEqualTo("Payments.Mandate.Created.v1");
         assertThat(row.getAggregateType()).isEqualTo("Mandate");
         assertThat(row.getAggregateId()).isEqualTo("CONS-1");
@@ -55,10 +54,9 @@ class MandateEventEnvelopeFactoryTest {
     }
 
     @Test
-    void revokedAndPaymentAcceptedEventsMapToTheirTopicsAndPayloads() throws Exception {
+    void revokedAndPaymentAcceptedEventsMapToTheirEventTypesAndPayloads() throws Exception {
         OutboxEventJpaEntity revoked = factory.toOutboxRow(
                 new MandateRevoked(UUID.randomUUID(), "CONS-1", 3L, AT, "TPP-001", "Customer request"), "ix-2");
-        assertThat(revoked.getTopic()).isEqualTo("evt.pay.mandate.revoked.v1");
         assertThat(revoked.getEventType()).isEqualTo("Payments.Mandate.Revoked.v1");
         assertThat(revoked.getAggregateVersion()).isEqualTo(3L);
         assertThat(json.readTree(revoked.getPayload()).at("/data/reason").asText()).isEqualTo("Customer request");
@@ -67,7 +65,6 @@ class MandateEventEnvelopeFactoryTest {
         OutboxEventJpaEntity accepted = factory.toOutboxRow(new MandatePaymentAccepted(UUID.randomUUID(), "CONS-1", 2L,
                 AT, "PAY-1", "TPP-001", new BigDecimal("1250.00"), "AED", "2026-02", new BigDecimal("2000.00")), "ix-3");
         JsonNode data = json.readTree(accepted.getPayload()).get("data");
-        assertThat(accepted.getTopic()).isEqualTo("evt.pay.mandate.payment-accepted.v1");
         assertThat(accepted.getEventType()).isEqualTo("Payments.Mandate.PaymentAccepted.v1");
         assertThat(data.get("paymentId").asText()).isEqualTo("PAY-1");
         assertThat(data.at("/amount/amount").asText()).isEqualTo("1250.00");

@@ -23,7 +23,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Relays committed outbox rows to Kafka in insertion order.
+ * Relays committed outbox rows to Kafka in insertion order, all to the
+ * mandate aggregate topic {@link #TOPIC} (ADR-019).
  *
  * One replica relays at a time (PostgreSQL advisory lock), so the service can
  * scale out without reordering a mandate's events. Consumers de-duplicate on
@@ -57,6 +58,12 @@ import java.util.concurrent.TimeUnit;
 public class OutboxRelay {
 
     static final long RELAY_LOCK_KEY = 0x6D616E5F6F7574L; // "man_out"
+    /**
+     * The mandate aggregate topic (ADR-019, one topic per aggregate): every mandate event
+     * goes here, keyed by the mandate id, and the eventType record header names the event.
+     * Computed here rather than stored per row (V8).
+     */
+    public static final String TOPIC = "evt.pay.mandate.v1";
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
     private final SpringDataOutboxRepository outbox;
@@ -123,16 +130,16 @@ public class OutboxRelay {
                     recordSendFailure(e);
                     if (classify(e) == FailureKind.OTHER) {
                         Duration backoff = block(now);
-                        log.warn("Outbox relay stopped: {} publishing to {}; no row marked, retrying in {}",
-                                rootCause(e).getClass().getSimpleName(), row.getTopic(), backoff, e);
+                        log.warn("Outbox relay stopped: {} publishing {} to {}; no row marked, retrying in {}",
+                                rootCause(e).getClass().getSimpleName(), row.getEventType(), TOPIC, backoff, e);
                         break;
                     }
                     row.markFailed(describe(e));
                     row.park(now, "relay: payload error " + describe(e));
                     recordParked(rootCause(e).getClass().getSimpleName());
                     heldBack.add(row.getAggregateId());
-                    log.error("Outbox relay parked event {} for {}: {}; its mandate's later events wait until it is"
-                            + " replayed or discarded by hand", row.getEventId(), row.getTopic(), row.getLastError(), e);
+                    log.error("Outbox relay parked event {} ({}): {}; its mandate's later events wait until it is"
+                            + " replayed or discarded by hand", row.getEventId(), row.getEventType(), row.getLastError(), e);
                 }
             }
             return sent;
@@ -155,7 +162,7 @@ public class OutboxRelay {
         for (OutboxEventJpaEntity parked : outbox.findUncountedParks()) {
             parked.markParkCounted();
             recordParked(OPERATOR_PARK);
-            log.warn("Outbox event {} for {} was parked by an operator", parked.getEventId(), parked.getTopic());
+            log.warn("Outbox event {} ({}) was parked by an operator", parked.getEventId(), parked.getEventType());
         }
     }
 
@@ -215,8 +222,12 @@ public class OutboxRelay {
         return cause;
     }
 
+    /**
+     * The record for a row: aggregate topic, key = aggregateId (the envelope's aggregateId, UTF-8
+     * text through the String serializer), and the ADR-019 section 3 headers as UTF-8 text.
+     */
     static ProducerRecord<String, String> toRecord(OutboxEventJpaEntity row) {
-        ProducerRecord<String, String> record = new ProducerRecord<>(row.getTopic(), row.getAggregateId(), row.getPayload());
+        ProducerRecord<String, String> record = new ProducerRecord<>(TOPIC, row.getAggregateId(), row.getPayload());
         record.headers().add("eventType", row.getEventType().getBytes(StandardCharsets.UTF_8));
         record.headers().add("eventId", row.getEventId().toString().getBytes(StandardCharsets.UTF_8));
         record.headers().add("correlationId", row.getCorrelationId().getBytes(StandardCharsets.UTF_8));
