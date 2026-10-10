@@ -1,6 +1,7 @@
 package com.enterprise.openfinance.recurringpayments.application;
 
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
@@ -607,6 +608,57 @@ class RecurringPaymentServiceTest {
 
         assertThat(mandates.data).isEmpty();
         assertThat(events.published).isEmpty();
+    }
+
+    @Test
+    void aTppCannotCreateAMandateUnderAnotherTppsRevokedOrExpiredConsent() {
+        // LP-08 / ADR-025: a consent id in a request body gets one uniform 403, whatever
+        // state the consent is in and whoever owns it.
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        consents.data.put("CONS-OTHER-REVOKED", new PsuConsent("CONS-OTHER-REVOKED", "TPP-002", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), false));
+        consents.data.put("CONS-OTHER-EXPIRED", new PsuConsent("CONS-OTHER-EXPIRED", "TPP-002", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2020-01-01T00:00:00Z"), true));
+        TestConsentPort mandates = new TestConsentPort();
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort(), consents);
+
+        for (String consentId : List.of("CONS-OTHER-REVOKED", "CONS-OTHER-EXPIRED", "MISSING-1")) {
+            assertThatThrownBy(() -> service.createConsent(command(consentId, null, null)))
+                    .isInstanceOf(ConsentNotUsableException.class)
+                    .hasMessage(ConsentNotUsableException.MESSAGE);
+        }
+        assertThat(mandates.data).isEmpty();
+        assertThat(events.published).isEmpty();
+    }
+
+    @Test
+    void aTppCannotCollectOnAnotherTppsRevokedOrExpiredMandateAndLearnsNothingAboutItsState() {
+        TestConsentPort mandates = new TestConsentPort();
+        TestPaymentPort payments = new TestPaymentPort();
+        RecurringPaymentService service = service(mandates, payments, new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+        VrpConsent revoked = createConsent(service);
+        service.revokeConsent(new RevokeVrpConsentCommand(revoked.consentId(), "TPP-001", "ix-8", "User request"));
+        VrpConsent expiring = createConsent(service);
+        mandates.save(new VrpConsent(expiring.consentId(), expiring.tppId(), expiring.psuId(), new BigDecimal("5000.00"),
+                "AED", VrpConsentStatus.AUTHORISED, Instant.parse("2026-02-09T09:00:00Z"), null));
+
+        // The owner is told the mandate's state ("Consent Revoked" / "Consent expired") ...
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", revoked.consentId(), "IDEMP-OWN-REV", new BigDecimal("10.00"), "AED", "ix-8")))
+                .hasMessage("Consent Revoked");
+        // ... another TPP gets the uniform refusal, the same as for an id that never existed.
+        for (String consentId : List.of(revoked.consentId(), expiring.consentId(), "MISSING-1")) {
+            assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                    "TPP-002", consentId, "IDEMP-OTHER-" + consentId, new BigDecimal("10.00"), "AED", "ix-8")))
+                    .isInstanceOf(ConsentNotUsableException.class)
+                    .hasMessage(ConsentNotUsableException.MESSAGE);
+        }
+        assertThat(payments.data).isEmpty();
     }
 
     @Test

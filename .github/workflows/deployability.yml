@@ -122,22 +122,53 @@ jobs:
       - name: Missing required config fails the render
         run: |
           chart=deploy/helm/payment-recurring-mandates-service
-          args="--set image.repository=ci/x --set image.tag=x \
-            --set externalSecret.remoteSecretName=a --set externalSecret.serviceClientSecretName=b"
-          # refuse <expected ERE> <helm args...>: the render must fail, and for that reason, so a probe cannot
-          # pass because helm failed to parse its values or another rule fired first.
+          # Every required value is supplied; each probe then drops exactly one, so the render can only
+          # fail on that one value's own "is required" message.
+          secrets="--set externalSecret.remoteSecretName=dev/payment-recurring-mandates-service/db-app \
+            --set externalSecret.serviceClientSecretName=dev/payment-recurring-mandates-service/oidc-client"
+          migration="--set migration.remoteSecretName=dev/payment-recurring-mandates-service/db-migration"
+          declare -A cfg=(
+            [DB_URL]='jdbc:postgresql://db.ci:5432/db_pay_recurring_mandates_ci?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem'
+            [KAFKA_BOOTSTRAP_SERVERS]='kafka.ci:9098'
+            [OIDC_ISSUER_URI]='https://idp.ci/realms/fintechbankx'
+            [OIDC_JWK_SET_URI]='https://idp.ci/realms/fintechbankx/protocol/openid-connect/certs'
+            [OIDC_TOKEN_URI]='https://idp.ci/realms/fintechbankx/protocol/openid-connect/token'
+            [ACCOUNTS_SERVICE_BASE_URL]='http://accounts.ci:8080'
+          )
+          # render_args <omitted config key|-> <include migration secret yes|no>: builds the helm args.
+          render_args() {
+            local omit="$1" k
+            local -a a=(--namespace payments --set image.repository=ci/x --set image.tag=x)
+            # shellcheck disable=SC2206
+            a+=($secrets)
+            [ "$2" = yes ] && a+=($migration)
+            for k in "${!cfg[@]}"; do
+              [ "$k" = "$omit" ] || a+=(--set-string "config.$k=${cfg[$k]}")
+            done
+            printf '%s\0' "${a[@]}"
+          }
+          # refuse <expected ERE> <omitted config key|-> <migration secret yes|no>: the render must fail, and
+          # for that reason, so a probe cannot pass because another rule fired first.
           refuse() {
-            local expect="$1"; shift
-            local out
-            if out="$(helm template ci "$chart" $args "$@" 2>&1 >/dev/null)"; then
-              echo "chart rendered with: $*" >&2; exit 1
+            local expect="$1" out
+            local -a a
+            mapfile -d '' -t a < <(render_args "$2" "$3")
+            if out="$(helm template ci "$chart" "${a[@]}" 2>&1 >/dev/null)"; then
+              echo "chart rendered without $2 (migration secret: $3)" >&2; exit 1
             fi
             if ! grep -qE "$expect" <<<"$out"; then
-              echo "chart refused '$*' for another reason than /$expect/:" >&2; echo "$out" | head -3 >&2; exit 1
+              echo "chart refused without $2 for another reason than /$expect/:" >&2; echo "$out" | head -3 >&2; exit 1
             fi
           }
-          # No DB_URL / Kafka / OIDC / accounts settings: the chart must say which one is missing.
-          refuse 'migration\.remoteSecretName is required'
+          # Control: with everything supplied the chart renders.
+          mapfile -d '' -t ok < <(render_args - yes)
+          helm template ci "$chart" "${ok[@]}" > /dev/null
+          # One required config key missing at a time: the chart must name that key.
+          for k in "${!cfg[@]}"; do
+            refuse "config\\.$k is required" "$k" yes
+          done
+          # The migration Job's secret on its own.
+          refuse 'migration\.remoteSecretName is required' - no
       # Governance round 3 (2b) and round 6 (guardrail 4a): no values override can move the
       # service off the checked JDBC URL or switch its TLS assertion off. The vendored platform
       # guard (templates/_fbx_helpers.tpl, fbx.guard, called through the adapter in

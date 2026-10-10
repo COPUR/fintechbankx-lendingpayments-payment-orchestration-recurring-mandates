@@ -719,6 +719,37 @@ class RecurringMandatesServiceIT {
         assertThat(log.getOut()).contains("reason=NOT_AUTHORISED interactionId=it-interaction-1");
     }
 
+    @Test
+    void anotherTppsRevokedOrExpiredConsentIsRefusedLikeAnyUnusableConsentOnCreateAndCollect() throws Exception {
+        Instant future = Instant.parse("2099-06-01T00:00:00Z");
+        List<String> bodies = new ArrayList<>();
+        // TPP-001 tries to build a mandate on consents of TPP-OTHER that are revoked / expired, and on an unknown id.
+        for (String consentId : List.of(
+                putPsuConsent("TPP-OTHER", java.util.Set.of("INITIATEVRP"), future, false),
+                putPsuConsent("TPP-OTHER", java.util.Set.of("INITIATEVRP"), Instant.parse("2020-01-01T00:00:00Z"), true),
+                "CONS-NEVER-ISSUED")) {
+            bodies.add(bodyWithoutTimestamp(mvc.perform(asTpp(post("/open-finance/v1/vrp/payment-consents"))
+                            .contentType(MediaType.APPLICATION_JSON).content(consentJson(consentId, "5000.00", null)))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.message").value("Consent not found or not authorised"))
+                    .andReturn()));
+        }
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_record", Integer.class)).isZero();
+
+        // TPP-002 submits a collection on TPP-001's revoked mandate: same body as for an id that never existed.
+        String revoked = createConsent("5000.00", null);
+        mvc.perform(asTpp(delete("/open-finance/v1/vrp/payment-consents/{id}", revoked)).param("reason", "Customer request"))
+                .andExpect(status().isNoContent());
+        for (String consentId : List.of(revoked, "CONS-NEVER-ISSUED")) {
+            bodies.add(bodyWithoutTimestamp(mvc.perform(paymentRequest(consentId, "IDEMP-LP08-" + consentId, "10.00", "TPP-002"))
+                    .andExpect(status().isForbidden()).andReturn()));
+        }
+        assertThat(bodies).hasSize(5).containsOnly(bodies.get(0));
+        assertThat(bodies.get(0)).contains("\"code\":\"FORBIDDEN\"", "Consent not found or not authorised")
+                .doesNotContain("Revoked", "expired");
+        assertThat(jdbc.queryForObject("select count(*) from " + SCHEMA + ".mandate_payment", Integer.class)).isZero();
+    }
+
     private String putPsuConsent(String participant, java.util.Set<String> scopes, Instant expiry, boolean usable) {
         String id = "CONS-AUTH-" + consentIds.incrementAndGet();
         psuConsents.put(id, new com.enterprise.openfinance.recurringpayments.domain.model.PsuConsent(id, participant,
