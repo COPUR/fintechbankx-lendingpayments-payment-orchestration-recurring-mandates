@@ -91,7 +91,7 @@ public class RecurringPaymentController {
 
         // The ETag is computed from the current state on every request, so a
         // revoked mandate never answers 304 with a stale tag, on any replica.
-        // Unknown and other TPPs' ids never get here: the use case throws (one 403).
+        // Unknown and other TPPs' ids never get here: the use case throws (one 404, ADR-025 item 5).
         VrpConsentResponse response = VrpConsentResponse.from(useCase.getConsent(new GetVrpConsentQuery(consentId, tppId, interactionId)));
 
         String etag = generateEtag(response.data().toString());
@@ -180,7 +180,7 @@ public class RecurringPaymentController {
 
         // The ETag is computed from the current state on every request, so a
         // revoked mandate never answers 304 with a stale tag, on any replica.
-        // Unknown and other TPPs' ids never get here: the use case throws (one 403).
+        // Unknown and other TPPs' ids never get here: the use case throws (one 404, ADR-025 item 5).
         VrpPaymentResponse response = VrpPaymentResponse.from(useCase.getPayment(new GetVrpPaymentQuery(paymentId, tppId, interactionId)));
 
         String etag = generateEtag(response.data().toString());
