@@ -1,0 +1,218 @@
+# svc-pay-recurring-mandates runtime configuration.
+# Every environment-specific value comes from the environment (Helm values,
+# Kubernetes Secret synced from AWS Secrets Manager); nothing secret is here.
+spring:
+  application:
+    # Naming standard: app.<context-code>.<capability>
+    name: app.pay.recurring-mandates
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/db_pay_recurring_mandates_local}
+    username: ${DB_USERNAME:pay_recurring_mandates_app}
+    # The credential is bound from SPRING_DATASOURCE_PASSWORD (Kubernetes Secret
+    # synced from AWS Secrets Manager); it is never written in this file.
+    hikari:
+      schema: sc_pay_recurring_mandates
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN_IDLE:2}
+      connection-timeout: 3000
+      max-lifetime: 1200000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: sc_pay_recurring_mandates
+        jdbc:
+          time_zone: UTC
+          batch_size: 50
+        order_inserts: true
+        order_updates: true
+  flyway:
+    # Migrations run as the schema owner (DB_MIGRATION_USERNAME / _PASSWORD,
+    # secret <env>/payment-recurring-mandates-service/db-migration), deployed as
+    # the Helm pre-install/pre-upgrade Job "migrate"; the pods get only the
+    # runtime role (DB_USERNAME, secret db-app) and run with
+    # SPRING_FLYWAY_ENABLED=false. V5 grants the runtime role its DML. Without
+    # DB_MIGRATION_* (local runs) Flyway uses the app credentials.
+    user: ${DB_MIGRATION_USERNAME:${spring.datasource.username}}
+    password: ${DB_MIGRATION_PASSWORD:${spring.datasource.password:}}
+    placeholders:
+      runtime_role: ${spring.datasource.username}
+    schemas: sc_pay_recurring_mandates
+    default-schema: sc_pay_recurring_mandates
+    create-schemas: true
+    locations: classpath:db/migration
+  kafka:
+    # Runtime-neutral; MSK IAM / Strimzi mTLS come from the kafka-msk / kafka-strimzi profiles.
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    client-id: svc-pay-recurring-mandates
+    security:
+      protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+    admin:
+      # Topics exist only through the platform topic catalog; never created from here.
+      auto-create: false
+    producer:
+      acks: all
+      compression-type: lz4
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+        # Kafka requires delivery.timeout.ms >= linger.ms + request.timeout.ms
+        # (KafkaProducerConfigurationTest); the default 30 s request timeout would
+        # stop the producer from starting.
+        delivery.timeout.ms: 30000
+        request.timeout.ms: 20000
+        linger.ms: 5
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${OIDC_ISSUER_URI:http://localhost:8180/realms/fintechbankx}
+          jwk-set-uri: ${OIDC_JWK_SET_URI:http://localhost:8180/realms/fintechbankx/protocol/openid-connect/certs}
+      # Outbound service-to-service calls use this service's own
+      # client-credentials token, never the TPP's token.
+      client:
+        registration:
+          accounts-service:
+            provider: fintechbankx
+            client-id: ${SERVICE_CLIENT_ID:svc-pay-recurring-mandates}
+            client-secret: ${SERVICE_CLIENT_SECRET:}
+            authorization-grant-type: client_credentials
+            client-authentication-method: client_secret_basic
+          consent-service:
+            provider: fintechbankx
+            client-id: ${SERVICE_CLIENT_ID:svc-pay-recurring-mandates}
+            client-secret: ${SERVICE_CLIENT_SECRET:}
+            authorization-grant-type: client_credentials
+            client-authentication-method: client_secret_basic
+        provider:
+          fintechbankx:
+            token-uri: ${OIDC_TOKEN_URI:http://localhost:8180/realms/fintechbankx/protocol/openid-connect/token}
+
+server:
+  port: 8080
+  shutdown: graceful
+  # DPoP htu is the public URL: the ingress gateway overwrites X-Forwarded-Proto/Host/Port
+  # and strips Forwarded and X-Forwarded-Prefix. X-Forwarded-For is never used for authorization.
+  forward-headers-strategy: framework
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  metrics:
+    # Platform common tags: service id, service account (app) and namespace
+    # (squad; the outbox alerts route on it). The chart sets the last two from
+    # serviceAccount.name and the release namespace.
+    tags:
+      service: svc-pay-recurring-mandates
+      app: ${METRICS_TAG_APP:payment-recurring-mandates-service}
+      squad: ${METRICS_TAG_SQUAD:payments}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  observations:
+    key-values:
+      service: svc-pay-recurring-mandates
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://otel-collector.observability.svc.cluster.local:4318/v1/traces}
+
+fintechbankx:
+  tls:
+    # Startup TLS assertion (TlsEnforcementInitializer): the service does not start
+    # unless every datasource URL (spring.datasource.url, spring.datasource.hikari.jdbc-url,
+    # spring.flyway.url), read the way PgJDBC reads it, carries exactly one
+    # sslmode=verify-full and no sslfactory, sslfactoryarg, sslhostnameverifier,
+    # sslpasswordcallback or service, and, when a Kafka client is configured, the
+    # effective security.protocol Spring Boot builds for it is SASL_SSL (MSK) or SSL
+    # (Strimzi mutual TLS); PLAINTEXT, SASL_PLAINTEXT and unset refuse. Only the local
+    # profile and the test resources set this false; the chart refuses the
+    # FINTECHBANKX_TLS_ENFORCE key, the local profile and every route to them.
+    enforce: true
+
+openfinance:
+  recurringpayments:
+    cache:
+      ttl: PT30S
+      max-entries: 10000
+    policy:
+      idempotency-ttl: PT24H
+
+mandates:
+  # The cumulative VRP limit resets at calendar-month boundaries in this zone
+  # (UAE mandates: Asia/Dubai, UTC+4, no DST).
+  limit-period-zone: ${MANDATES_LIMIT_PERIOD_ZONE:Asia/Dubai}
+  security:
+    # Tokens must carry this service id in aud; azp alone is not enough.
+    audience: ${OIDC_AUDIENCE:svc-pay-recurring-mandates}
+  accounts:
+    # http: accounts API (default, fails closed). in-memory: demo accounts for local runs only.
+    adapter: ${ACCOUNTS_ADAPTER:http}
+    # Interim: no system serves the account-status read to services yet (the
+    # monolith only has the TPP-facing AIS read). Point both at the system of
+    # record once it exists; until then calls fail closed with 503.
+    base-url: ${ACCOUNTS_SERVICE_BASE_URL:http://accounts-service:8080}
+    path: ${ACCOUNTS_SERVICE_PATH:/api/v1/accounts/{accountId}}
+    client-registration-id: accounts-service
+    connect-timeout: PT1S
+    read-timeout: PT2S
+  consent:
+    # Every mandate is bound to a consent the PSU authorised in
+    # consent-authorization-service (GET /api/v1/consents/{id}, usable flag
+    # authoritative). in-memory: demo consents for local runs only.
+    adapter: ${CONSENT_ADAPTER:http}
+    base-url: ${CONSENT_SERVICE_BASE_URL:http://consent-authorization-service.open-finance.svc.cluster.local:8080}
+    client-registration-id: consent-service
+    connect-timeout: PT1S
+    read-timeout: PT2S
+  outbox:
+    retention: P7D
+    relay:
+      # Off until the evt.pay.mandate.v1 topic exists on the platform cluster.
+      enabled: ${OUTBOX_RELAY_ENABLED:false}
+      interval: PT1S
+      batch-size: 100
+      # ADR-021 decision 4: payload errors park the row (its mandate stays held
+      # back); every other error stops the batch without marking a row and the
+      # relay backs off (2 s to 5 min). No time-based parking. Alert on
+      # outbox_oldest_pending_age_seconds and outbox_send_failures_total.
+      # Longer than delivery.timeout.ms, so the relay never gives up on a send Kafka is still retrying.
+      send-timeout: PT35S
+
+security:
+  dpop:
+    # The VRP API is TPP-facing: DPoP scheme, cnf.jkt-bound token and a fresh
+    # proof (jti kept in dpop_proof_jti) on every call. false only lets an
+    # unbound Bearer token without a proof through; never false in production.
+    required: ${DPOP_REQUIRED:true}
+    max-age: PT5M
+    clock-skew: PT30S
+    purge-interval: PT10M
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"

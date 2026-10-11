@@ -21,7 +21,6 @@ import org.springframework.http.ResponseEntity;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -67,7 +66,7 @@ class RecurringPaymentControllerUnitTest {
         assertThat(paymentResponse.getHeaders().getFirst("X-OF-Idempotency")).isEqualTo("MISS");
 
         ArgumentCaptor<GetVrpConsentQuery> consentQueryCaptor = ArgumentCaptor.forClass(GetVrpConsentQuery.class);
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.of(consent("CONS-VRP-001")));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(consent("CONS-VRP-001"));
         controller.getConsent("DPoP token", "proof", "ix-2", "TPP-001", "CONS-VRP-001", null);
         Mockito.verify(useCase).getConsent(consentQueryCaptor.capture());
         assertThat(consentQueryCaptor.getValue().consentId()).isEqualTo("CONS-VRP-001");
@@ -78,8 +77,8 @@ class RecurringPaymentControllerUnitTest {
         RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
         RecurringPaymentController controller = new RecurringPaymentController(useCase);
 
-        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(Optional.of(consent("CONS-VRP-001")));
-        Mockito.when(useCase.getPayment(Mockito.any())).thenReturn(Optional.of(payment("PAY-VRP-001")));
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(consent("CONS-VRP-001"));
+        Mockito.when(useCase.getPayment(Mockito.any())).thenReturn(payment("PAY-VRP-001"));
 
         ResponseEntity<VrpConsentResponse> firstConsent = controller.getConsent(
                 "DPoP token",
@@ -122,9 +121,68 @@ class RecurringPaymentControllerUnitTest {
         assertThat(secondConsent.getStatusCode()).isEqualTo(HttpStatus.NOT_MODIFIED);
         assertThat(secondPayment.getStatusCode()).isEqualTo(HttpStatus.NOT_MODIFIED);
 
+        // The ETag is recomputed from current state on each request (no per-pod ETag cache).
         ArgumentCaptor<GetVrpPaymentQuery> paymentQueryCaptor = ArgumentCaptor.forClass(GetVrpPaymentQuery.class);
-        Mockito.verify(useCase).getPayment(paymentQueryCaptor.capture());
+        Mockito.verify(useCase, Mockito.times(2)).getPayment(paymentQueryCaptor.capture());
         assertThat(paymentQueryCaptor.getValue().paymentId()).isEqualTo("PAY-VRP-001");
+    }
+
+    @Test
+    void shouldNotAnswerNotModifiedWithAStaleEtagAfterTheMandateWasRevoked() {
+        RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
+        RecurringPaymentController controller = new RecurringPaymentController(useCase);
+        VrpConsent authorised = consent("CONS-VRP-001");
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(authorised);
+        ResponseEntity<VrpConsentResponse> first = controller.getConsent(
+                "DPoP token", "proof", "ix-5", "TPP-001", "CONS-VRP-001", null);
+
+        VrpConsent revoked = authorised.revoke(Instant.parse("2026-02-09T10:00:00Z"), "Customer request").mandate();
+        Mockito.when(useCase.getConsent(Mockito.any())).thenReturn(revoked);
+        ResponseEntity<VrpConsentResponse> second = controller.getConsent(
+                "DPoP token", "proof", "ix-5", "TPP-001", "CONS-VRP-001", first.getHeaders().getETag());
+
+        assertThat(second.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(second.getBody().data().status()).isEqualTo("Revoked");
+        assertThat(second.getHeaders().getETag()).isNotEqualTo(first.getHeaders().getETag());
+    }
+
+    @Test
+    void shouldPassTheDebtorAccountAndRequireATppIdentity() {
+        RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
+        RecurringPaymentController controller = new RecurringPaymentController(useCase);
+        Mockito.when(useCase.createConsent(Mockito.any())).thenReturn(consent("CONS-VRP-001"));
+
+        controller.createConsent("Bearer token", "proof", "ix-6", "TPP-001", new VrpConsentRequest(
+                new VrpConsentRequest.Data("CONS-AUTH-1", "PSU-001", new VrpConsentRequest.Limit("5000.00", "AED"),
+                        Instant.parse("2099-01-01T00:00:00Z"), new VrpConsentRequest.DebtorAccount("ACC-AED-ACTIVE"))));
+
+        ArgumentCaptor<com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand> command =
+                ArgumentCaptor.forClass(com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand.class);
+        Mockito.verify(useCase).createConsent(command.capture());
+        assertThat(command.getValue().debtorAccountId()).isEqualTo("ACC-AED-ACTIVE");
+        assertThat(command.getValue().consentId()).isEqualTo("CONS-AUTH-1");
+        assertThatThrownBy(() -> controller.createConsent("Bearer token", "proof", "ix-6", "TPP-001",
+                new VrpConsentRequest(new VrpConsentRequest.Data("CONS-AUTH-1", null, null, null, null))))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("Data.Limit.Amount is required");
+
+        assertThatThrownBy(() -> controller.getConsent("Bearer token", "proof", "ix-6", null, "CONS-VRP-001", null))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException.class)
+                .hasMessageContaining("TPP identity is required");
+    }
+
+    @Test
+    void anUnknownConsentOrPaymentIsTheUseCasesNotFound() {
+        RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
+        RecurringPaymentController controller = new RecurringPaymentController(useCase);
+        Mockito.when(useCase.getConsent(Mockito.any())).thenThrow(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND));
+        Mockito.when(useCase.getPayment(Mockito.any())).thenThrow(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND));
+
+        assertThatThrownBy(() -> controller.getConsent("Bearer t", "proof", "ix-7", "TPP-001", "CONS-404", null))
+                .hasMessage("Consent not found");
+        assertThatThrownBy(() -> controller.getPayment("Bearer t", "proof", "ix-7", "TPP-001", "PAY-404", null))
+                .hasMessage("Payment not found");
     }
 
     @Test
@@ -188,9 +246,11 @@ class RecurringPaymentControllerUnitTest {
 
     private static VrpConsentRequest consentRequest(String psuId, String amount, String currency, String expiresAt) {
         return new VrpConsentRequest(new VrpConsentRequest.Data(
+                "CONS-AUTH-1",
                 psuId,
                 new VrpConsentRequest.Limit(amount, currency),
-                Instant.parse(expiresAt)
+                Instant.parse(expiresAt),
+                null
         ));
     }
 

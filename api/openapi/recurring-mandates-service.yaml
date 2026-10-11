@@ -2,13 +2,30 @@ openapi: 3.0.3
 info:
   title: Recurring Mandates Service API
   version: 0.1.0
-  description: API for variable recurring payment mandate lifecycle and execution.
+  description: >-
+    API for variable recurring payment mandate lifecycle and execution
+    (svc-pay-recurring-mandates). Tokens must carry the service id in aud; the
+    TPP is the token's client (azp). DPoP (RFC 9449) is enforced: the
+    Authorization header uses the DPoP scheme with a token bound by cnf.jkt,
+    and every request carries a fresh proof (typ dpop+jwt, ES256 or PS256,
+    htm, htu, iat within 5 minutes, ath, single-use jti). A plain Bearer
+    token, a missing, replayed or mismatching proof is answered 401 with
+    WWW-Authenticate DPoP error="invalid_dpop_proof".
+
+
+    Change note: other-TPP resource ids answer 404 (was 403).
 servers:
-  - url: https://api.example.com/open-finance/v1
+  - url: https://api.example.com/open-finance/v1/vrp
+    description: The service serves every path below under /open-finance/v1/vrp.
 paths:
   /payment-consents:
     post:
       summary: Create recurring mandate consent
+      description: >-
+        A ConsentId the caller may not use (unknown, not authorised, another
+        TPP's) gets one body, 403 with code FORBIDDEN and message "Consent not
+        found or not authorised"; the caller's own revoked or expired mandate is
+        told so.
       operationId: createRecurringConsent
       security:
         - bearerAuth: []
@@ -30,9 +47,23 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConsentResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          description: Missing or invalid token or DPoP proof
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /payment-consents/{consentId}:
     get:
       summary: Get recurring mandate consent status
+      description: >-
+        An unknown mandate id and another TPP's get the same answer, 404 with
+        code NOT_FOUND and message "Consent not found" (ADR-025); the caller's
+        own revoked or expired mandate is told so.
       operationId: getRecurringConsent
       security:
         - bearerAuth: []
@@ -50,9 +81,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ConsentResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+    delete:
+      summary: Revoke recurring mandate consent
+      description: >-
+        An unknown mandate id and another TPP's get the same answer, 404 with
+        code NOT_FOUND and message "Consent not found" (ADR-025); the caller's
+        own revoked or expired mandate is told so.
+      operationId: revokeRecurringConsent
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InteractionId'
+        - $ref: '#/components/parameters/Dpop'
+        - name: consentId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: reason
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Mandate revoked (also returned when it was already revoked)
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
   /payments:
     post:
       summary: Execute recurring payment under mandate
+      description: >-
+        A ConsentId the caller may not use (unknown, not authorised, another
+        TPP's) gets one body, 403 with code FORBIDDEN and message "Consent not
+        found or not authorised"; the caller's own revoked or expired mandate is
+        told so.
       operationId: executeRecurringPayment
       security:
         - bearerAuth: []
@@ -69,14 +140,25 @@ paths:
               $ref: '#/components/schemas/ExecutePaymentRequest'
       responses:
         '201':
-          description: Payment accepted
+          description: Payment accepted (or the original payment on an idempotent replay)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
   /payments/{paymentId}:
     get:
       summary: Get recurring payment status
+      description: >-
+        An unknown payment id and another TPP's get the same answer, 404 with
+        code NOT_FOUND and message "Payment not found" (ADR-025).
       operationId: getRecurringPayment
       security:
         - bearerAuth: []
@@ -94,7 +176,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentResponse'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
 components:
+  responses:
+    Error:
+      description: Error with a stable code
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   securitySchemes:
     bearerAuth:
       type: http
@@ -123,6 +216,7 @@ components:
       name: DPoP
       in: header
       required: true
+      description: DPoP proof JWT for this request, verified by the service (single use).
       schema:
         type: string
   schemas:
@@ -132,17 +226,54 @@ components:
       properties:
         Data:
           type: object
-          required: [MaximumIndividualAmount, PeriodType, ExpirationDateTime]
+          description: >-
+            A mandate is created only under a consent the PSU authorised in
+            consent-authorization-service. The mandate takes that consent's id,
+            PSU and debtor account; the TPP supplies the monthly limit. A PsuId
+            or later ExpiryDateTime that differs from the consent is refused
+            with 403; a DebtorAccount problem is always the same 400 (see
+            DebtorAccount).
+          required: [ConsentId, Limit]
           properties:
-            MaximumIndividualAmount:
+            ConsentId:
               type: string
-            Currency:
+              description: >-
+                Id of the PSU-authorised consent (scope INITIATEVRP, participant =
+                the calling TPP). It becomes the mandate id; one mandate per consent
+                (a second request is 409).
+            PsuId:
               type: string
-            PeriodType:
-              type: string
-            ExpirationDateTime:
+              description: Optional; must equal the consent's customer.
+            Limit:
+              type: object
+              description: >-
+                Maximum accepted total per calendar month (Asia/Dubai). The amount
+                may not have more decimals than the currency's minor unit.
+              required: [Amount, Currency]
+              properties:
+                Amount:
+                  type: string
+                Currency:
+                  type: string
+            ExpiryDateTime:
               type: string
               format: date-time
+              description: Optional; defaults to the consent's expiry and may not be later than it.
+            DebtorAccount:
+              type: object
+              description: >-
+                Optional when the consent covers exactly one account; otherwise
+                required and one of the consent's accounts. Checked with the
+                accounts service (active, debits allowed, same currency) at
+                creation and before every collection. An account outside the
+                consent, an unknown account and an unusable one all get the
+                same 400 BUSINESS_RULE_VIOLATION "DebtorAccount cannot be used
+                for this mandate", so the API reveals neither whether an
+                account exists nor whose it is.
+              required: [Identification]
+              properties:
+                Identification:
+                  type: string
     ExecutePaymentRequest:
       type: object
       required: [Data]
@@ -181,3 +312,16 @@ components:
               type: string
             Status:
               type: string
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: FORBIDDEN, NOT_FOUND, CONFLICT, CONCURRENT_UPDATE, BUSINESS_RULE_VIOLATION, INVALID_REQUEST, DEPENDENCY_UNAVAILABLE or INTERNAL_ERROR
+        message:
+          type: string
+        interactionId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time

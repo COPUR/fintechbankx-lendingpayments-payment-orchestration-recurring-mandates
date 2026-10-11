@@ -8,8 +8,7 @@ public record VrpPayment(
         String consentId,
         String tppId,
         String idempotencyKey,
-        BigDecimal amount,
-        String currency,
+        Money instructedAmount,
         String periodKey,
         VrpPaymentStatus status,
         Instant createdAt
@@ -28,11 +27,8 @@ public record VrpPayment(
         if (isBlank(idempotencyKey)) {
             throw new IllegalArgumentException("idempotencyKey is required");
         }
-        if (amount == null || amount.signum() <= 0) {
+        if (instructedAmount == null || !instructedAmount.isPositive()) {
             throw new IllegalArgumentException("amount must be positive");
-        }
-        if (isBlank(currency)) {
-            throw new IllegalArgumentException("currency is required");
         }
         if (isBlank(periodKey)) {
             throw new IllegalArgumentException("periodKey is required");
@@ -48,8 +44,29 @@ public record VrpPayment(
         consentId = consentId.trim();
         tppId = tppId.trim();
         idempotencyKey = idempotencyKey.trim();
-        currency = currency.trim();
         periodKey = periodKey.trim();
+    }
+
+    /** Rehydration from stored primitives (persistence, tests). */
+    public VrpPayment(String paymentId,
+                      String consentId,
+                      String tppId,
+                      String idempotencyKey,
+                      BigDecimal amount,
+                      String currency,
+                      String periodKey,
+                      VrpPaymentStatus status,
+                      Instant createdAt) {
+        this(paymentId, consentId, tppId, idempotencyKey, amount == null ? null : Money.of(amount, currency),
+                periodKey, status, createdAt);
+    }
+
+    public BigDecimal amount() {
+        return instructedAmount.amount();
+    }
+
+    public String currency() {
+        return instructedAmount.currencyCode();
     }
 
     public boolean isAccepted() {

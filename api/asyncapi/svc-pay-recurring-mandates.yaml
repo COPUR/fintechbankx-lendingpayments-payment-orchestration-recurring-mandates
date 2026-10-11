@@ -1,0 +1,316 @@
+# AsyncAPI contract for svc-pay-recurring-mandates.
+# Status: Proposed. Provider-owned; mirrored to fintechbankx-governance-api-contracts-asyncapi-catalog.
+# Validate: npx -y @asyncapi/cli@2.13.0 validate api/asyncapi/svc-pay-recurring-mandates.yaml
+asyncapi: 3.0.0
+id: urn:fintechbankx:asyncapi:svc-pay-recurring-mandates
+info:
+  title: svc-pay-recurring-mandates events
+  version: 1.0.0
+  description: 'Event contract for svc-pay-recurring-mandates (repository fintechbankx-lendingpayments-payment-orchestration-recurring-mandates,
+    canonical name fintechbankx-payments-recurring-mandates-service).
+
+
+    Status: Proposed. Owner: Recurring and Bulk Payments Squad. Event namespace: `evt.pay.mandate`. The provider repository
+    owns this contract; the asyncapi catalog mirrors it (catalog PR pending).
+
+
+    Implementation: MandateEventEnvelopeFactory writes these envelopes to the transactional outbox (sc_pay_recurring_mandates.mandate_outbox_event)
+    in the mandate transaction; OutboxRelay publishes every one to the aggregate topic `evt.pay.mandate.v1` with record key
+    = aggregateId (the mandate id) and the eventType, eventId, correlationId and x-fapi-interaction-id record headers
+    (traceparent when the request was traced), ADR-019. aggregateVersion is the mandate
+    version after the change (0 on creation, +1 per revocation or accepted payment), so consumers can detect gaps per mandate.
+    Money is a decimal string.
+
+
+    Every message uses the standard envelope (common/event-envelope.yaml). The topic uses cleanup.policy=delete. Adding an
+    optional field or a new event type is a minor change; a removal, rename or type change in one event is a new event
+    major (eventType ...v2) published on the same topic alongside the old one until consumers move.'
+  tags:
+  - name: payments
+  - name: evt.pay.mandate
+  x-service-id: svc-pay-recurring-mandates
+  x-event-namespace: evt.pay.mandate
+  x-owning-squad: Recurring and Bulk Payments Squad
+defaultContentType: application/json
+servers:
+  msk:
+    host: '{bootstrapServers}'
+    protocol: kafka-secure
+    description: Amazon MSK cluster of the FinTechBankX event platform (svc-evt-streaming) on AWS. TLS in transit,
+      SASL_SSL with mechanism AWS_MSK_IAM using the service's IRSA role (ADR-024, platform contract 2026-10-08).
+    variables:
+      bootstrapServers:
+        description: MSK IAM bootstrap brokers (port 9098), injected per environment by the platform.
+    security:
+    - $ref: '#/components/securitySchemes/mskIam'
+  local:
+    host: '{bootstrapServers}'
+    protocol: kafka-secure
+    description: Strimzi cluster in namespace kafka, for local and non-AWS environments only. Mutual TLS with
+      Strimzi-issued client certificates.
+    variables:
+      bootstrapServers:
+        description: Strimzi TLS bootstrap service, injected per environment.
+    security:
+    - $ref: '#/components/securitySchemes/mtls'
+channels:
+  mandate:
+    address: evt.pay.mandate.v1
+    title: evt.pay.mandate.v1
+    description: 'Every event of the mandate aggregate, keyed by aggregateId (the mandate id) so that the events of one
+      mandate stay in order in one partition (ADR-019, one topic per aggregate). The eventType record header names the
+      event: Payments.Mandate.Created.v1, Payments.Mandate.Revoked.v1, Payments.Mandate.PaymentAccepted.v1. Consumers
+      skip event types they do not handle.'
+    messages:
+      MandateCreated:
+        $ref: '#/components/messages/MandateCreated'
+      MandateRevoked:
+        $ref: '#/components/messages/MandateRevoked'
+      MandatePaymentAccepted:
+        $ref: '#/components/messages/MandatePaymentAccepted'
+    bindings:
+      kafka:
+        topic: evt.pay.mandate.v1
+        partitions: 3
+        replicas: 3
+        topicConfiguration:
+          cleanup.policy:
+          - delete
+          retention.ms: 604800000
+          max.message.bytes: 1048576
+        bindingVersion: 0.5.0
+operations:
+  publishMandateCreated:
+    action: send
+    title: Publish Payments.Mandate.Created.v1
+    summary: svc-pay-recurring-mandates publishes Payments.Mandate.Created.v1 through its transactional outbox.
+    channel:
+      $ref: '#/channels/mandate'
+    messages:
+    - $ref: '#/channels/mandate/messages/MandateCreated'
+  publishMandateRevoked:
+    action: send
+    title: Publish Payments.Mandate.Revoked.v1
+    summary: svc-pay-recurring-mandates publishes Payments.Mandate.Revoked.v1 through its transactional outbox.
+    channel:
+      $ref: '#/channels/mandate'
+    messages:
+    - $ref: '#/channels/mandate/messages/MandateRevoked'
+  publishMandatePaymentAccepted:
+    action: send
+    title: Publish Payments.Mandate.PaymentAccepted.v1
+    summary: svc-pay-recurring-mandates publishes Payments.Mandate.PaymentAccepted.v1 through its transactional outbox.
+    channel:
+      $ref: '#/channels/mandate'
+    messages:
+    - $ref: '#/channels/mandate/messages/MandatePaymentAccepted'
+components:
+  schemas:
+    EventEnvelope:
+      $ref: ./common/event-envelope.yaml#/EventEnvelope
+    EventHeaders:
+      $ref: ./common/event-envelope.yaml#/EventHeaders
+    MonetaryAmount:
+      $ref: ./common/event-envelope.yaml#/MonetaryAmount
+    MandateCreatedData:
+      type: object
+      description: Payload of Payments.Mandate.Created.v1.
+      additionalProperties: false
+      properties:
+        mandateId:
+          type: string
+          minLength: 1
+          description: Mandate (VRP consent) id; equals aggregateId.
+        tppId:
+          type: string
+          minLength: 1
+          description: Client id of the TPP that holds the mandate.
+        psuId:
+          type: string
+          minLength: 1
+          description: Pseudonymous PSU id.
+        maximumAmount:
+          allOf:
+          - &id001
+            $ref: '#/components/schemas/MonetaryAmount'
+          description: Maximum accepted total per calendar month in Asia/Dubai (mandates.limit-period-zone).
+        periodType:
+          type: string
+          const: Month
+          description: Limit period. Always Month in v1.
+        expiresAt:
+          type: string
+          format: date-time
+        debtorAccountLinked:
+          type: boolean
+          description: True when a debtor account was verified with the accounts service. The account id is not published.
+      required:
+      - mandateId
+      - tppId
+      - psuId
+      - maximumAmount
+      - periodType
+      - expiresAt
+      - debtorAccountLinked
+    MandateRevokedData:
+      type: object
+      description: Payload of Payments.Mandate.Revoked.v1.
+      additionalProperties: false
+      properties:
+        mandateId:
+          type: string
+          minLength: 1
+        tppId:
+          type: string
+          minLength: 1
+        reason:
+          type: string
+          description: Free-text reason given by the TPP. Must not contain personal data.
+        revokedAt:
+          type: string
+          format: date-time
+      required:
+      - mandateId
+      - tppId
+      - reason
+      - revokedAt
+    MandatePaymentAcceptedData:
+      type: object
+      description: Payload of Payments.Mandate.PaymentAccepted.v1.
+      additionalProperties: false
+      properties:
+        mandateId:
+          type: string
+          minLength: 1
+        paymentId:
+          type: string
+          minLength: 1
+        tppId:
+          type: string
+          minLength: 1
+        amount:
+          allOf:
+          - *id001
+          description: Accepted amount.
+        periodKey:
+          type: string
+          pattern: ^[0-9]{4}-[0-9]{2}$
+          description: Calendar month (YYYY-MM) in Asia/Dubai unless mandates.limit-period-zone says otherwise.
+        periodTotal:
+          allOf:
+          - *id001
+          description: Accepted total for periodKey including this payment.
+      required:
+      - mandateId
+      - paymentId
+      - tppId
+      - amount
+      - periodKey
+      - periodTotal
+  messages:
+    MandateCreated:
+      name: MandateCreated
+      title: Payments.Mandate.Created.v1
+      summary: A TPP's variable recurring payment mandate was authorised (status AUTHORISED, version 0).
+      contentType: application/json
+      headers:
+        allOf:
+        - $ref: '#/components/schemas/EventHeaders'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.Created.v1
+      payload:
+        allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.Created.v1
+            producer:
+              const: svc-pay-recurring-mandates
+            aggregateId:
+              description: Mandate id (consentId).
+            data:
+              $ref: '#/components/schemas/MandateCreatedData'
+      bindings:
+        kafka:
+          key:
+            type: string
+            description: aggregateId (mandate id).
+          bindingVersion: 0.5.0
+      x-source-class: com.enterprise.openfinance.recurringpayments.domain.event.MandateCreated
+    MandateRevoked:
+      name: MandateRevoked
+      title: Payments.Mandate.Revoked.v1
+      summary: The mandate was revoked; no further collections are accepted under it.
+      contentType: application/json
+      headers:
+        allOf:
+        - $ref: '#/components/schemas/EventHeaders'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.Revoked.v1
+      payload:
+        allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.Revoked.v1
+            producer:
+              const: svc-pay-recurring-mandates
+            aggregateId:
+              description: Mandate id (consentId).
+            data:
+              $ref: '#/components/schemas/MandateRevokedData'
+      bindings:
+        kafka:
+          key:
+            type: string
+            description: aggregateId (mandate id).
+          bindingVersion: 0.5.0
+      x-source-class: com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked
+    MandatePaymentAccepted:
+      name: MandatePaymentAccepted
+      title: Payments.Mandate.PaymentAccepted.v1
+      summary: A collection under the mandate was accepted within the monthly limit.
+      contentType: application/json
+      headers:
+        allOf:
+        - $ref: '#/components/schemas/EventHeaders'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.PaymentAccepted.v1
+      payload:
+        allOf:
+        - $ref: '#/components/schemas/EventEnvelope'
+        - type: object
+          properties:
+            eventType:
+              const: Payments.Mandate.PaymentAccepted.v1
+            producer:
+              const: svc-pay-recurring-mandates
+            aggregateId:
+              description: Mandate id (consentId).
+            data:
+              $ref: '#/components/schemas/MandatePaymentAcceptedData'
+      bindings:
+        kafka:
+          key:
+            type: string
+            description: aggregateId (mandate id).
+          bindingVersion: 0.5.0
+      x-source-class: com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted
+  securitySchemes:
+    mskIam:
+      type: userPassword
+      description: SASL_SSL with SASL mechanism AWS_MSK_IAM. There is no user or password; the client signs with the
+        AWS credentials of its IRSA role, and a topic-scoped IAM policy (terraform module msk-client-access) grants
+        produce or consume rights. AsyncAPI has no IAM scheme type, so userPassword stands for the SASL family.
+      x-sasl-mechanism: AWS_MSK_IAM
+    mtls:
+      type: X509
+      description: Mutual TLS with Strimzi-issued client certificates (local and non-AWS clusters only).

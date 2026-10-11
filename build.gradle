@@ -1,6 +1,7 @@
 plugins {
     id 'java-library'
     id 'io.spring.dependency-management' version '1.1.7' apply false
+    id 'org.springframework.boot' version '3.3.6' apply false
 }
 
 description = 'Recurring mandates bounded context parent module'
@@ -32,6 +33,11 @@ subprojects {
 
     dependencies {
         testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        // Spring 6.1+ resolves @PathVariable / @RequestParam names from parameter metadata.
+        options.compilerArgs << '-parameters'
     }
 
     tasks.withType(Test).configureEach {

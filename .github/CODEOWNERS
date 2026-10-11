@@ -1,0 +1,19 @@
+# bounded_context: payment_recurring_mandates
+# owning_squad: Recurring and Bulk Payments Squad
+# owning_tribe: Lending & Payments Tribe
+# review_cadence: quarterly
+# data_owner: svc-pay-recurring-mandates (sc_pay_recurring_mandates)
+# upstream_dependencies: Keycloak realm fintechbankx; accounts API (ACCOUNTS_SERVICE_BASE_URL)
+# published_events: evt.pay.mandate.v1 (Payments.Mandate.Created.v1, Payments.Mandate.Revoked.v1, Payments.Mandate.PaymentAccepted.v1)
+# consumed_events: none
+* @COPUR
+
+# AsyncAPI breaking-change waivers need an owner review (cicd-templates 13d09a1).
+**/*.accepted-breaking.txt @COPUR
+
+# Guardrail 4a: the vendored platform guard (cicd-templates 6b6c317), its verifier, the workflow
+# that pins the guard's sha256, and this file. Takes effect once code-owner review is required.
+/deploy/helm/payment-recurring-mandates-service/templates/_fbx_helpers.tpl @COPUR
+/scripts/ci/verify-vendored-guard.sh @COPUR
+/.github/workflows/deployability.yml @COPUR
+/.github/CODEOWNERS @COPUR

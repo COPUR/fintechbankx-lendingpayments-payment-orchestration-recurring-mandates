@@ -1,0 +1,177 @@
+# Defaults are production-shaped (multi-replica, spread across zones).
+# Override per environment with values-<env>.yaml. Install into namespace
+# "payments" (platform contract).
+
+image:
+  repository: ""   # e.g. <account>.dkr.ecr.<region>.amazonaws.com/fintechbankx/payment-recurring-mandates-service
+  tag: ""          # immutable tag (git SHA); never "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 3
+
+serviceAccount:
+  name: payment-recurring-mandates-service
+  # IAM role from deploy/terraform output workload_role_arn (IRSA).
+  roleArn: ""
+
+podLabels:
+  app.kubernetes.io/part-of: fintechbankx-payments
+  fintechbankx.io/service-id: svc-pay-recurring-mandates
+  # Naming standard k8s app label (app-<ctx>-<cap>); plain `app` is reserved for the SA name by the platform contract.
+  fintechbankx.io/app: app-pay-recurring-mandates
+  sidecar.istio.io/inject: "true"
+
+service:
+  port: 8080
+  managementPort: 8081
+
+# Memory request = limit (no overcommit; the JVM sizes its heap from the limit).
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    memory: 1Gi
+
+# CPU only: JVM heap does not shrink, so memory utilisation is not a scaling signal.
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 65
+
+podDisruptionBudget:
+  minAvailable: 2
+
+networkPolicy:
+  enabled: true
+  # Namespaces whose pods may call the API on 8080 (TPP traffic arrives through the ingress gateway).
+  apiNamespaces:
+    - istio-ingress
+  # Namespaces allowed to scrape the management port 8081.
+  managementNamespaces:
+    - observability
+
+# Extra environment entries for the API pods (Kubernetes EnvVar objects, e.g.
+# {name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70"}). Kubernetes env wins
+# over the ConfigMap's envFrom, so the platform guard (templates/_fbx_helpers.tpl,
+# cicd-templates 6b6c317 fbx.guard, called by templates/_helpers.tpl mandates.guard)
+# checks every entry: no DB_URL in any spelling (value or valueFrom); no Spring
+# datasource, Flyway, Liquibase or R2DBC property (SPRING_DATASOURCE_USERNAME and
+# SPRING_DATASOURCE_PASSWORD excepted), spring.application.json, jdbc_url,
+# sslfactory, sslhostnameverifier, sslpasswordcallback, sslmode, sslrootcert
+# (DB_SSL_ROOT_CERT is rendered by the chart), spring.config.*, spring.profiles.*,
+# spring.ssl.*, *ssl.bundle* or fintechbankx.tls.* name, in any case or
+# relaxed-binding spelling; this chart also refuses spring.kafka.*security.protocol
+# and spring.kafka.properties.* names. A *security.protocol value must be SASL_SSL
+# (kafka-msk) or SSL (kafka-strimzi) and literal. JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS
+# and _JAVA_OPTIONS need a literal value (no valueFrom) with no datasource, flyway,
+# liquibase, r2dbc, jdbc, ssl, application.json, spring.config, spring.profiles,
+# fintechbankx (this chart: the whole word), kafka (this chart), security.protocol,
+# endpoint.identification, java.security.properties, jdk.tls or hostname
+# verification word, no option file, no $( or ${. No value may contain $( and any
+# value that is a PostgreSQL JDBC URL is parsed like config.DB_URL. Names must be
+# printable ASCII. Each refused entry fails the render. envFrom, extraEnvFrom and
+# externalSecret.dataFrom are not supported (refused when set).
+extraEnv: []
+
+# The Spring profile the chart activates (rendered as SPRING_PROFILES_ACTIVE
+# through fbx.kafkaProfile, with KAFKA_SECURITY_PROTOCOL unless config sets it):
+# kafka-msk (Amazon MSK, SASL_SSL with IAM) or kafka-strimzi (in-cluster Strimzi,
+# SSL with the KafkaUser certificate). Exactly one, nothing else: the local profile
+# switches the startup TLS assertion off and the chart refuses every route to it
+# (this value, config and extraEnv names, JVM options).
+kafka:
+  profile: kafka-msk
+
+# Non-secret runtime settings, rendered into a ConfigMap with quoted keys and
+# values. Values marked "required" fail the render when empty. Keys and values pass
+# the guard described at extraEnv; config.DB_URL is the one place for the JDBC URL.
+config:
+  # required (deploy/terraform output jdbc_url). Must verify the server
+  # certificate against the mounted RDS CA bundle (rdsCaBundle below), e.g.
+  # jdbc:postgresql://<aurora-writer>:5432/db_pay_recurring_mandates_<env>?sslmode=verify-full&sslrootcert=/etc/fintechbankx/rds-ca/global-bundle.pem
+  # Parsed the way PgJDBC reads it: one lower-case sslmode=verify-full, one
+  # sslrootcert equal to the mounted bundle, no sslfactory, sslfactoryarg,
+  # sslhostnameverifier, sslpasswordcallback or service, no percent-encoded '=' or
+  # '&', no TLS key before the '?', no ${ or $(.
+  DB_URL: ""
+  # Runtime role (DML only, granted by V5); its password comes from the
+  # db-app secret. The schema owner is used only by the migration Job.
+  DB_USERNAME: pay_recurring_mandates_app
+  DB_POOL_MAX: "10"
+  KAFKA_BOOTSTRAP_SERVERS: ""     # required: MSK bootstrap_brokers_sasl_iam (port 9098)
+  # KAFKA_SECURITY_PROTOCOL is rendered from kafka.profile (SASL_SSL or SSL); setting it here
+  # is allowed only with the value that profile needs.
+  OIDC_ISSUER_URI: ""             # required: https://<identity-host>/realms/fintechbankx
+  OIDC_JWK_SET_URI: ""            # required: <issuer>/protocol/openid-connect/certs
+  OIDC_TOKEN_URI: ""              # required: <issuer>/protocol/openid-connect/token (client credentials)
+  OIDC_AUDIENCE: svc-pay-recurring-mandates
+  SERVICE_CLIENT_ID: svc-pay-recurring-mandates
+  # Every mandate is bound to a PSU-authorised consent read from consent-authorization-service
+  # (internal GET /api/v1/consents/{id}, this service's client-credentials token).
+  CONSENT_ADAPTER: http
+  CONSENT_SERVICE_BASE_URL: http://consent-authorization-service.open-finance.svc.cluster.local:8080
+  # Interim: no system serves an account-status read to services yet. The monolith's only
+  # account read is the TPP-facing AIS GET /open-finance/v1/accounts/{accountId} (PSU AIS
+  # consent plus DPoP-bound TPP token, no debit flag), which this service cannot call.
+  # Point base URL and path at the system of record when it exists; until then mandates
+  # that name a debtor account fail closed with 503.
+  ACCOUNTS_ADAPTER: http
+  ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API base URL
+  ACCOUNTS_SERVICE_PATH: /api/v1/accounts/{accountId}
+  OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.v1 exists on the cluster
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
+
+# Flyway migration step: a Helm pre-install/pre-upgrade Job running the image
+# with "migrate" as the schema owner. Only this Job gets the owner credential;
+# the pods run with SPRING_FLYWAY_ENABLED=false.
+migration:
+  enabled: true
+  # required: <env>/payment-recurring-mandates-service/db-migration
+  # ({"username","password"} of the schema owner; deploy/terraform output
+  # migration_db_secret_name).
+  remoteSecretName: ""
+  # A classic (non-native) Istio sidecar keeps the Job from completing, so
+  # the Job runs outside the mesh by default; it only talks to Aurora (TLS
+  # verify-full). Set true once the cluster runs Istio native sidecars.
+  # The Job runs as its own hook ServiceAccount, named like the Job
+  # (templates/migration-job.yaml), never the chart's: before flipping this,
+  # the mesh must admit that hook account's identity for Aurora egress.
+  istioSidecar: false
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 512Mi
+
+# Amazon RDS CA bundle (platform contract "Database CA bundle"): ConfigMap
+# rds-ca-bundle, key global-bundle.pem, published by trust-manager into every
+# service namespace. Mounted read-only so DB_URL can use sslmode=verify-full
+# with sslrootcert=<mountPath>/global-bundle.pem. The chart ships no copy.
+rdsCaBundle:
+  configMapName: rds-ca-bundle
+  key: global-bundle.pem
+  # Platform chart convention (cicd-templates 4f0f266); also exported as DB_SSL_ROOT_CERT.
+  mountPath: /etc/fintechbankx/rds-ca
+
+# Credentials, synced from AWS Secrets Manager by External Secrets Operator.
+externalSecret:
+  enabled: true
+  secretStoreRef:
+    kind: ClusterSecretStore
+    name: aws-secrets-manager
+  # Keys must be <env>/payment-recurring-mandates-service/<name> (platform
+  # admission policy; the chart refuses anything else at render time).
+  # <env>/payment-recurring-mandates-service/db-app (runtime role password,
+  # deploy/terraform output app_db_secret_name).
+  remoteSecretName: ""
+  # <env>/payment-recurring-mandates-service/oidc-client, property client_secret.
+  serviceClientSecretName: ""
+  refreshInterval: 1h
+
+topologySpread:
+  maxSkew: 1

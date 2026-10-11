@@ -1,0 +1,25 @@
+{{- $required := list "DB_URL" "KAFKA_BOOTSTRAP_SERVERS" "OIDC_ISSUER_URI" "OIDC_JWK_SET_URI" "OIDC_TOKEN_URI" "ACCOUNTS_SERVICE_BASE_URL" -}}
+{{- range $key := $required }}
+{{- $_ := required (printf "config.%s is required" $key) (index $.Values.config $key) }}
+{{- end }}
+{{- /* Guardrail 4a: fbx.guard runs from deployment.yaml and migration-job.yaml (mandates.guard, _helpers.tpl)
+     and checks every key and value below; keys and values are quoted so none can add a key. */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mandates.name" . }}
+  labels:
+    {{- include "mandates.labels" . | nindent 4 }}
+data:
+  {{- range $key, $value := .Values.config }}
+  {{ $key | quote }}: {{ $value | quote }}
+  {{- end }}
+  # The Kafka profile in the image, from kafka.profile (kafka-msk or kafka-strimzi; never local),
+  # and the protocol it uses (SASL_SSL with MSK, SSL with Strimzi) unless config sets KAFKA_SECURITY_PROTOCOL.
+  SPRING_PROFILES_ACTIVE: {{ include "fbx.kafkaProfile" (dict "Values" (dict "kafka" (dict "runtime" (include "mandates.kafkaRuntime" .)))) | quote }}
+  {{- if not (hasKey .Values.config "KAFKA_SECURITY_PROTOCOL") }}
+  KAFKA_SECURITY_PROTOCOL: {{ include "mandates.kafkaProtocol" . | quote }}
+  {{- end }}
+  # Micrometer common tags (platform convention): app = service account, squad = namespace.
+  METRICS_TAG_APP: {{ .Values.serviceAccount.name | quote }}
+  METRICS_TAG_SQUAD: {{ .Release.Namespace | quote }}

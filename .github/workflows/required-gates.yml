@@ -31,11 +31,31 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          gradle --no-daemon clean assemble -x test
+          ./gradlew --no-daemon clean assemble -x test
 
   test:
     name: ci/test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: db_pay_recurring_mandates_test
+          POSTGRES_USER: mandates_test
+          POSTGRES_PASSWORD: mandates_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mandates_test -d db_pay_recurring_mandates_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # open-finance-bootstrap integration tests run Flyway and the whole service
+      # against this database; with CI=true they fail (not skip) if it is missing.
+      TEST_DB_URL: jdbc:postgresql://localhost:5432/db_pay_recurring_mandates_test
+      TEST_DB_USERNAME: mandates_test
+      TEST_DB_PASSWORD: mandates_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,8 +73,29 @@ jobs:
         with:
           node-version: '22'
 
+      - name: TDD guard - production change needs a test change (ADR-029)
+        if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          NO_BEHAVIOUR_CHANGE: ${{ contains(github.event.pull_request.labels.*.name, 'no-behaviour-change') }}
+        run: |
+          changed="$(git diff --name-only "origin/${BASE_REF}...HEAD")"
+          main_changed="$(printf '%s\n' "$changed" | grep -E '(^|/)src/main/' || true)"
+          test_changed="$(printf '%s\n' "$changed" | grep -E '(^|/)src/test/' || true)"
+          if [ -n "$main_changed" ] && [ -z "$test_changed" ]; then
+            if [ "$NO_BEHAVIOUR_CHANGE" = "true" ]; then
+              echo "src/main changed without src/test; allowed by label no-behaviour-change."
+              exit 0
+            fi
+            echo "This PR changes src/main without touching src/test:"
+            printf '%s\n' "$main_changed"
+            echo "Add the failing test that drove the change, or label the PR no-behaviour-change."
+            exit 1
+          fi
+
       - name: Run tests and coverage gates
-        run: gradle --no-daemon clean check
+        run: ./gradlew --no-daemon clean check
 
       - name: Assert test execution produced reports
         shell: bash
@@ -82,6 +123,42 @@ jobs:
         env:
           NPM_CONFIG_CACHE: /tmp/.npm
         run: npx -y @redocly/cli@1.27.1 lint api/openapi/*.yaml
+
+      # ADR-019 section 5: the producer gates its own AsyncAPI file. CLI versions as in the
+      # AsyncAPI catalog's workflow (Node 22, @asyncapi/cli 2.13.0, yaml 2.9.1).
+      - name: AsyncAPI contract validation
+        if: ${{ hashFiles('api/asyncapi/*.yaml') != '' }}
+        env:
+          NPM_CONFIG_CACHE: /tmp/.npm
+        run: |
+          for spec in api/asyncapi/*.yaml; do
+            npx -y @asyncapi/cli@2.13.0 validate "$spec"
+          done
+
+      # The gate scripts and the common envelope are copies of the AsyncAPI catalog's at commit
+      # 44837cc (README, "Event contract gate"); an edited copy fails here. Re-copy and update both lists together.
+      - name: AsyncAPI gate scripts match the catalog copy
+        if: ${{ hashFiles('api/asyncapi/*.yaml') != '' }}
+        run: |
+          sha256sum -c --strict - <<'SUMS'
+          de255737fe6b54ffbadce8e030e18eec48d0137e0abd43c790fe201a10015eb1  scripts/ci/asyncapi-breaking.mjs
+          5b39d588673c5f7ab55fcfa548fffd70b96ab9b11ea82bd2b61468dadb430c77  scripts/ci/asyncapi-breaking.sh
+          212df6ca092e1ed5519664d7848c9de5fdb5d137f34faa3d31a25e3fe29b3847  scripts/ci/lib/asyncapi-model.mjs
+          299e8731ccd365d8b1bccb698c3ae0e48812e1d2da85ed435680fcc7c61867ed  api/asyncapi/common/event-envelope.yaml
+          SUMS
+
+      - name: AsyncAPI breaking-change check
+        if: ${{ hashFiles('api/asyncapi/*.yaml') != '' }}
+        env:
+          # Always main: versions count from the first merge to main; before that the spec is
+          # pre-release and stays 1.0.0 (asyncapi-catalog README, "Change rules").
+          BASE_REF: origin/main
+          # The catalog script, unchanged, reads the spec directory from ASYNCAPI_DIR.
+          ASYNCAPI_DIR: api/asyncapi
+          NPM_CONFIG_CACHE: /tmp/.npm
+        run: |
+          npm install --no-save --no-package-lock yaml@2.9.1
+          ./scripts/ci/asyncapi-breaking.sh
 
       - name: Install oasdiff
         if: ${{ hashFiles('api/openapi/*.yaml') != '' }}

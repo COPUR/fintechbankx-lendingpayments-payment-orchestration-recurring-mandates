@@ -24,6 +24,7 @@ dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.assertj:assertj-core'
     testImplementation 'org.mockito:mockito-core'
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
 }
 
 jacoco {
