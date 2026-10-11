@@ -111,6 +111,24 @@ jobs:
           grep -q "METRICS_TAG_APP: \"$sa\"" <<<"$rendered"
           python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates <<<"$rendered"
           helm template ci "$chart" -f "$chart/values-dev.yaml" $args | python scripts/ci/helm-selector-check.py "$sa" svc-pay-recurring-mandates
+          # Platform round 7: the migration Job runs as its own hook ServiceAccount (no token, no IAM
+          # role), created before the Job, never the chart's account or the namespace default.
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --user pyyaml==6.0.2
+          helm template ci "$chart" $args | python3 -c '
+          import sys, yaml
+          docs = [d for d in yaml.safe_load_all(sys.stdin) if d]
+          job = [d for d in docs if d["kind"] == "Job"][0]
+          name = job["spec"]["template"]["spec"].get("serviceAccountName")
+          sas = {d["metadata"]["name"]: d for d in docs if d["kind"] == "ServiceAccount"}
+          assert name and name in sas, (name, sorted(sas))
+          sa = sas[name]["metadata"]
+          dep = [d for d in docs if d["kind"] == "Deployment"][0]["spec"]["template"]["spec"]
+          assert name != dep.get("serviceAccountName"), name
+          assert sa["annotations"]["helm.sh/hook"] == job["metadata"]["annotations"]["helm.sh/hook"], sa
+          assert int(sa["annotations"]["helm.sh/hook-weight"]) < int(job["metadata"]["annotations"]["helm.sh/hook-weight"]), sa
+          assert sas[name].get("automountServiceAccountToken") is False and not sa.get("annotations", {}).get("eks.amazonaws.com/role-arn"), sa
+          assert job["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+          print("migration Job runs as hook ServiceAccount", name)'
       # templates/_fbx_helpers.tpl is the platform's charts/fintechbankx-service/templates/_helpers.tpl, byte for
       # byte and without a header (fbx.guard and the helpers it calls). The script checks the pinned digest, that
       # no other file of the chart defines an fbx.* template and that every workload template runs the guard

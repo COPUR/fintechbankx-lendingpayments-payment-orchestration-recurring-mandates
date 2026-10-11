@@ -135,6 +135,9 @@ migration:
   # A classic (non-native) Istio sidecar keeps the Job from completing, so
   # the Job runs outside the mesh by default; it only talks to Aurora (TLS
   # verify-full). Set true once the cluster runs Istio native sidecars.
+  # The Job runs as its own hook ServiceAccount, named like the Job
+  # (templates/migration-job.yaml), never the chart's: before flipping this,
+  # the mesh must admit that hook account's identity for Aurora egress.
   istioSidecar: false
   backoffLimit: 1
   activeDeadlineSeconds: 600
