@@ -75,21 +75,27 @@ with other value names vendors this file unchanged and passes an adapter dict
 (README "Vendoring the guard"):
   include "fbx.guard" (dict "Values" (dict "config" <map> "extraEnv" <list>
     "envFrom" <list> "extraEnvFrom" <list>
-    "javaToolOptions" <string> "databaseCa" <dict enabled/mountPath/key>
+    "javaToolOptions" <string>
+    "databaseCa" <dict enabled/mountPath/key/configMapName>
     "kafka" (dict "runtime" <""|msk|strimzi>)
     "externalSecret" (dict "enabled" <bool> "data" <list> "extraData" <list>
       "dataFrom" <list>)))
 Every key is optional except that a databaseCa with enabled: true needs
-mountPath and key. A key left out is never checked, so every value of the
-chart that feeds one of these routes must be mapped, including any
+mountPath, key and configMapName, which must be /etc/fintechbankx/rds-ca,
+global-bundle.pem and rds-ca-bundle; the adapter passes the configMapName
+its templates mount (fbx.validateDatabaseCa). A key left out is never checked, so every value of
+the chart that feeds one of these routes must be mapped, including any
 envFrom-like list and an ExternalSecret dataFrom (the guard refuses them
-when non-empty). It runs fbx.validateEnvSources, fbx.validateDatabaseTls,
-fbx.validateKafkaTls and fbx.validateKeyNames.
+when non-empty). It runs fbx.validateEnvSources, fbx.validateDatabaseCa,
+fbx.validateDatabaseTls, fbx.validateKafkaTls, fbx.validateSecretNames and
+fbx.validateKeyNames.
 */}}
 {{- define "fbx.guard" -}}
 {{- include "fbx.validateEnvSources" . -}}
+{{- include "fbx.validateDatabaseCa" . -}}
 {{- include "fbx.validateDatabaseTls" . -}}
 {{- include "fbx.validateKafkaTls" . -}}
+{{- include "fbx.validateSecretNames" . -}}
 {{- include "fbx.validateKeyNames" . -}}
 {{- end -}}
 
@@ -159,6 +165,46 @@ are refused (the chart renders only its own configMapRef and secretRef).
 {{- end -}}
 
 {{/*
+Database CA mount. While databaseCa.enabled the chart mounts the ConfigMap
+<configMapName> (item <key>) at <mountPath> in every pod that reads the
+database, and sslrootcert and DB_SSL_ROOT_CERT are <mountPath>/<key>; they
+are pinned to the trust-manager Bundle the mesh repo publishes in every
+service namespace:
+  - mountPath must be /etc/fintechbankx/rds-ca: another path can put a
+    values-chosen ConfigMap item where the service reads files (/app is the
+    image WORKDIR and Spring Boot loads optional:file:./config/, so
+    mountPath /app/config with key application.yml can activate the local
+    profile or set fintechbankx.tls.enforce=false);
+  - key must be global-bundle.pem;
+  - configMapName is required and must be rds-ca-bundle: another
+    ConfigMap replaces the database trust anchor, and an adapter that left
+    the name out would let values choose it. A key a values file sets to
+    null is deleted by Helm before any template runs, so it is refused as
+    missing.
+With databaseCa.enabled false nothing is mounted and nothing is checked here.
+*/}}
+{{- define "fbx.validateDatabaseCa" -}}
+{{- $ca := .Values.databaseCa | default dict -}}
+{{- if $ca.enabled -}}
+{{- $mountPath := toString ($ca.mountPath | default "") -}}
+{{- if ne $mountPath "/etc/fintechbankx/rds-ca" -}}
+{{- fail (printf "databaseCa.mountPath must be /etc/fintechbankx/rds-ca (got %q): the CA bundle is mounted only there; another path can put a ConfigMap where the service reads files (/app is the image WORKDIR and Spring Boot loads ./config/application.yml)" $mountPath) -}}
+{{- end -}}
+{{- $key := toString ($ca.key | default "") -}}
+{{- if ne $key "global-bundle.pem" -}}
+{{- fail (printf "databaseCa.key must be global-bundle.pem (got %q), the key of the rds-ca-bundle ConfigMap the mesh repo's trust-manager Bundle publishes" $key) -}}
+{{- end -}}
+{{- $name := toString ($ca.configMapName | default "") -}}
+{{- if eq $name "" -}}
+{{- fail "databaseCa.configMapName is required while databaseCa.enabled and must be rds-ca-bundle: pass the ConfigMap name the chart mounts (an adapter that leaves it out lets values choose the database trust anchor; Helm deletes a key set to null)" -}}
+{{- end -}}
+{{- if ne $name "rds-ca-bundle" -}}
+{{- fail (printf "databaseCa.configMapName must be rds-ca-bundle (got %q), the ConfigMap the mesh repo's trust-manager Bundle publishes in every service namespace; another ConfigMap replaces the database trust anchor" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Every PostgreSQL JDBC URL the chart passes to the workload must verify the
 server certificate and host name (sslmode=require encrypts but trusts any
 certificate). The query string is parsed the way PgJDBC reads it (split after
@@ -166,7 +212,9 @@ the first '?', then on '&', key=value on the first '='), not searched for a
 substring:
   - exactly one sslmode, equal to verify-full;
   - with databaseCa.enabled, exactly one sslrootcert, equal to
-    <databaseCa.mountPath>/<databaseCa.key> (at most one otherwise);
+    <databaseCa.mountPath>/<databaseCa.key>, which fbx.validateDatabaseCa
+    pins to /etc/fintechbankx/rds-ca/global-bundle.pem (at most one
+    otherwise);
   - no sslfactory / sslfactoryarg (NonValidatingFactory), sslhostnameverifier,
     sslpasswordcallback or service (pg_service.conf can override the TLS settings);
   - parameter names are plain [A-Za-z0-9_.-] (no percent-encoding), no
@@ -188,6 +236,13 @@ the env names the Secret materialises and whose values are never seen here):
   - (?i)^spring[._-]?(datasource|flyway|liquibase|r2dbc)[._-] (any Spring
     datasource, Flyway, Liquibase or R2DBC property, not only *URL), except
     SPRING_DATASOURCE_USERNAME and SPRING_DATASOURCE_PASSWORD;
+  - (?i)^spring[._-]?data[._-]?mongodb([._-]|$): every spring.data.mongodb.*
+    name (uri, host, port, ssl.enabled, ssl.bundle, replica-set-name,
+    database, ...) can point the DocumentDB client at another server or
+    switch its TLS off, except SPRING_DATA_MONGODB_USERNAME and
+    SPRING_DATA_MONGODB_PASSWORD (any case), allowed where the datasource
+    credentials are. The connection string comes from MONGODB_URI, a
+    Secret-only name (fbx.validateSecretNames);
   - spring.application.json in any spelling ([._-] or none, any case);
   - any name containing jdbc[._-]?url, ssl[._-]?factory (also sslfactoryarg),
     ssl[._-]?host[._-]?name[._-]?verifier or ssl[._-]?password[._-]?callback
@@ -229,23 +284,43 @@ the env names the Secret materialises and whose values are never seen here):
   - (?i)^fintechbankx[._-]?tls([._-]|$): fintechbankx.tls.enforce
     (FINTECHBANKX_TLS_ENFORCE) is the only switch that turns the service's
     startup TLS assertion off, and only the local profile and test resources
-    set it; any other fintechbankx.tls.* key is refused with it.
-Each rule is checked against the name as given and against its relaxed-binding
-canonical form (fbx.canonicalName: Spring Boot skips every character other than
-[a-z0-9] inside an element and reads foo[bar] as foo.bar, so spring.pro-files,
-spring.pro:files and spring[profiles] bind like the plain name). The helper
-prints the reason (non-empty means rejected).
+    set it; any other fintechbankx.tls.* key is refused with it;
+  - Kafka client TLS, (?i)^spring[._-]?kafka[._-](<client>[._-])?(properties[._-])?ssl([._-]|$):
+    spring.kafka.ssl.* and spring.kafka.<client>.ssl.* (<client> producer,
+    consumer, admin, streams or any other one element: trust store, key
+    store, PEM certificates, key password, TLS protocol) and
+    spring.kafka[.<client>].properties.ssl.* (the raw client properties
+    ssl.truststore.location, ssl.keystore.type, ...), whatever kafka.runtime
+    is; they come from the kafka-msk / kafka-strimzi profile in the image.
+    The one name under these prefixes that stays allowed is
+    ssl.endpoint.identification.algorithm (its canonical form ends in
+    ssl.endpoint.identification.algorithm), whose value fbx.validateKafkaTls
+    checks; security.protocol is not under ssl and keeps its value check.
+    Other spring.kafka[.<client>].properties.* names (sasl.* for MSK IAM)
+    are not refused.
+Each rule is checked against the name as given and against both of its
+relaxed-binding readings: the environment reading (fbx.canonicalName: '_'
+separates elements, Spring Boot skips every character other than [a-z0-9]
+inside an element and reads foo[bar] as foo.bar, so spring.pro-files,
+spring.pro:files and spring[profiles] bind like the plain name) and the
+property reading (fbx.propertyName: only '.' and '[...]' separate elements and
+'_' is skipped too, so spring.pro_files, spring.kafka.s_sl and
+spring.data.mongo_db bind as spring.profiles, spring.kafka.ssl and
+spring.data.mongodb). The helper prints the reason (non-empty means rejected).
 JVM options (JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS, _JAVA_OPTIONS and the chart's
 javaToolOptions) can set -Dspring.datasource.url=..., -Djavax.net.ssl.*,
 -Dspring.config.*, -Dspring.profiles.*, -Dspring.ssl.bundle.*,
--Dfintechbankx.tls.*, -Dspring.kafka.security.protocol,
+-Dfintechbankx.tls.*, -Dspring.kafka.*, -Dspring.data.mongodb.*,
+-DKAFKA_TLS_CA or -DMONGODB_URI (a system property resolves the services'
+${KAFKA_TLS_CA} and ${MONGODB_URI} before the environment does),
 -Djava.security.properties (a security properties file can replace the trust
 manager algorithm or keystore type), -Djdk.tls.* or
 -Djdk.internal.httpclient.disableHostnameVerification, or read more options
 from a file: a value that mentions datasource, flyway, liquibase, r2dbc, jdbc,
 ssl, application[._-]json, spring[._-]config, spring[._-]profiles,
 fintechbankx[._-]tls, security[._-]protocol, endpoint[._-]identification,
-java[._-]security[._-]properties, jdk[._-]tls or hostname[._-]verification
+kafka, mongo[._-]db, java[._-]security[._-]properties, jdk[._-]tls or
+hostname[._-]verification
 (also once every character other than [a-z0-9] is removed, keeping and then
 dropping white space: -Dspring..config.import, -Dspring.[profiles].active,
 -Dspring.pro_files.active, a quoted "-Dspring.pro files.active" and JSON
@@ -281,12 +356,36 @@ and against this form.
 {{- trimAll "." $c -}}
 {{- end -}}
 
+{{/*
+Property reading of a name, the second form every name rule is checked
+against: Spring Boot 3.3.6 maps an environment variable through its default
+property mapper as well as the environment one, and the default mapper splits
+the name on '.' only and skips every character other than [a-z0-9] inside an
+element, '_' included. So spring.kafka.s_sl.trust-store-type,
+spring.data.mongo_db.host, spring.pro_files.active and fintech_bankx.tls.enforce
+(env names and ConfigMap keys Kubernetes accepts) bind
+spring.kafka.ssl.trust-store-type, spring.data.mongodb.host,
+spring.profiles.active and fintechbankx.tls.enforce, which fbx.canonicalName
+(s.sl, mongo.db, pro.files) does not show. Lower case, '[' and ']' read as
+'.', every character outside [a-z0-9.] removed ('_' too), repeated dots
+collapsed, leading and trailing dots trimmed.
+*/}}
+{{- define "fbx.propertyName" -}}
+{{- $c := regexReplaceAll "[\\[\\]]+" (lower (toString .)) "." -}}
+{{- $c = regexReplaceAll "[^a-z0-9.]+" $c "" -}}
+{{- $c = regexReplaceAll "[.]+" $c "." -}}
+{{- trimAll "." $c -}}
+{{- end -}}
+
 {{- define "fbx.datasourceOverrideName" -}}
 {{- $n := toString . -}}
-{{- if not (regexMatch "(?i)^SPRING_DATASOURCE_(USERNAME|PASSWORD)$" $n) -}}
+{{- if not (regexMatch "(?i)^SPRING_(DATASOURCE|DATA_MONGODB)_(USERNAME|PASSWORD)$" $n) -}}
 {{- $reason := include "fbx.overrideNameReason" $n -}}
 {{- if not $reason -}}
 {{- $reason = include "fbx.overrideNameReason" (include "fbx.canonicalName" $n) -}}
+{{- end -}}
+{{- if not $reason -}}
+{{- $reason = include "fbx.overrideNameReason" (include "fbx.propertyName" $n) -}}
 {{- end -}}
 {{- $reason -}}
 {{- end -}}
@@ -306,6 +405,10 @@ a profile can activate an application-<profile> config in the image (e.g. local)
 an SSL bundle property can replace the trust anchor of the service's DocumentDB, PostgreSQL or Kafka client, or point the client at another bundle
 {{- else if regexMatch "(?i)^fintechbankx[._-]?tls([._-]|$)" $n -}}
 it can switch off the service's startup TLS assertion (fintechbankx.tls.enforce is for the local profile and tests only)
+{{- else if and (regexMatch "(?i)^spring[._-]?kafka[._-](?:[a-z0-9]+[._-])?(?:properties[._-])?ssl(?:[._-]|$)" $n) (not (regexMatch "^spring\\.?kafka\\.(?:[a-z0-9]+\\.)?(?:properties\\.)?ssl\\.endpoint\\.?identification\\.?algorithm$" (include "fbx.canonicalName" $n))) -}}
+a Kafka client TLS setting (spring.kafka[.<client>].ssl.*, spring.kafka[.<client>].properties.ssl.*) can replace the client's trust store, key store or certificates or change its TLS protocol; they come from the kafka-msk / kafka-strimzi profile in the image (the Strimzi client certificate, key and CA through KAFKA_TLS_CERT, KAFKA_TLS_KEY and KAFKA_TLS_CA from a Secret), and only ssl.endpoint.identification.algorithm may be set (https)
+{{- else if regexMatch "(?i)^spring[._-]?data[._-]?mongodb([._-]|$)" $n -}}
+a spring.data.mongodb.* property can point the DocumentDB client at another server or switch its TLS off; the connection string comes only from MONGODB_URI in a Secret, and only SPRING_DATA_MONGODB_USERNAME and SPRING_DATA_MONGODB_PASSWORD may be set
 {{- end -}}
 {{- end -}}
 
@@ -344,9 +447,9 @@ IAM over SASL_SSL; strimzi -> kafka-strimzi, Strimzi mutual TLS over SSL).
 {{- end -}}
 {{- $alt := regexReplaceAll "[^a-z0-9\\s]+" (lower $v) "" -}}
 {{- $flat := regexReplaceAll "[^a-z0-9]+" (lower $v) "" -}}
-{{- $rule := "(?i)datasource|flyway|liquibase|r2dbc|jdbc|ssl|application[._-]?json|spring[._-]?config|spring[._-]?profiles|fintechbankx[._-]?tls|security[._-]?protocol|endpoint[._-]?identification|java[._-]?security[._-]?properties|jdk[._-]?tls|hostname[._-]?verification|(^|[\\s\"'])@|-XX:(VMOptionsFile|Flags)" -}}
+{{- $rule := "(?i)datasource|flyway|liquibase|r2dbc|jdbc|ssl|application[._-]?json|spring[._-]?config|spring[._-]?profiles|fintechbankx[._-]?tls|security[._-]?protocol|endpoint[._-]?identification|kafka|mongo[._-]?db|java[._-]?security[._-]?properties|jdk[._-]?tls|hostname[._-]?verification|(^|[\\s\"'])@|-XX:(VMOptionsFile|Flags)" -}}
 {{- if or (regexMatch $rule $v) (regexMatch $rule $alt) (regexMatch $rule $flat) -}}
-{{- fail (printf "%s must not mention datasource, flyway, liquibase, r2dbc, jdbc, ssl, application.json, spring.config, spring.profiles, fintechbankx.tls, security.protocol, endpoint.identification, java.security.properties, jdk.tls or hostname verification, nor read options from a file ('@' argument file, also quoted, -XX:VMOptionsFile, -XX:Flags) (JVM system properties would override the datasource past the sslmode=verify-full check, the trust store, the Kafka TLS settings or the service's TLS assertion)" .where) -}}
+{{- fail (printf "%s must not mention datasource, flyway, liquibase, r2dbc, jdbc, ssl, application.json, spring.config, spring.profiles, fintechbankx.tls, security.protocol, endpoint.identification, kafka, mongodb, java.security.properties, jdk.tls or hostname verification, nor read options from a file ('@' argument file, also quoted, -XX:VMOptionsFile, -XX:Flags) (JVM system properties would override the datasource past the sslmode=verify-full check, the trust store, the Kafka or DocumentDB client settings or the service's TLS assertion)" .where) -}}
 {{- end -}}
 {{- end -}}
 
@@ -422,12 +525,16 @@ check covers clients built in code; README "Service-side TLS assertion"):
     (Amazon MSK IAM), with strimzi SSL (Strimzi mutual TLS);
   - these names need a literal extraEnv value (no valueFrom, not even next to
     an empty value) and may not come from the ExternalSecret.
+Both name patterns are also checked against fbx.canonicalName and
+fbx.propertyName (spring.kafka.secu-rity.protocol,
+spring.kafka.security.pro_tocol, spring.kafka.properties[security.protocol]).
 */}}
 {{- define "fbx.kafkaTlsName" -}}
 {{- $n := toString . -}}
 {{- $c := include "fbx.canonicalName" $n -}}
-{{- if or (regexMatch "(?i)(^|[._-])security[._-]?protocol$" $n) (regexMatch "(^|\\.)security\\.?protocol$" $c) -}}protocol
-{{- else if or (regexMatch "(?i)endpoint[._-]?identification[._-]?algorithm" $n) (regexMatch "endpoint\\.?identification\\.?algorithm" $c) -}}endpoint
+{{- $p := include "fbx.propertyName" $n -}}
+{{- if or (regexMatch "(?i)(^|[._-])security[._-]?protocol$" $n) (regexMatch "(^|\\.)security\\.?protocol$" $c) (regexMatch "(^|\\.)security\\.?protocol$" $p) -}}protocol
+{{- else if or (regexMatch "(?i)endpoint[._-]?identification[._-]?algorithm" $n) (regexMatch "endpoint\\.?identification\\.?algorithm" $c) (regexMatch "endpoint\\.?identification\\.?algorithm" $p) -}}endpoint
 {{- end -}}
 {{- end -}}
 
@@ -477,6 +584,85 @@ check covers clients built in code; README "Service-side TLS assertion"):
 {{- $key := toString (default "" $entry.secretKey) -}}
 {{- if include "fbx.kafkaTlsName" $key -}}
 {{- fail (printf "externalSecret.%s must not materialise %s; set it as a literal in config or extraEnv, where SASL_SSL/SSL and https are enforced" $field $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Secret-only names (fbx.validateSecretNames): env names a service reads as a
+${NAME} placeholder that carry TLS material, so they reach the pod only from
+a Secret, whatever kafka.runtime is:
+  - KAFKA_TLS_CERT, KAFKA_TLS_KEY, KAFKA_TLS_CA: the PEM client certificate,
+    key and cluster CA the kafka-strimzi profile reads
+    (spring.kafka.ssl.key-store-certificate-chain: ${KAFKA_TLS_CERT}, ...);
+    the Kafka repo's client guide (docs/guides/SERVICE_CLIENT_CONFIGURATION.md)
+    maps them from the Secret kafka-client-tls with secretKeyRef. Under msk
+    or "" no profile reads them; the same routes keep one values file valid
+    for every runtime;
+  - MONGODB_URI: the DocumentDB connection string (credentials and TLS
+    options, tls=true) the open-finance services read as ${MONGODB_URI};
+    their charts materialise it from their own ExternalSecret.
+Allowed only as an extraEnv entry with valueFrom.secretKeyRef alone (no
+value, not even an empty one, no configMapKeyRef, fieldRef or
+resourceFieldRef) or as an externalSecret data/extraData secretKey, and only
+in exactly these spellings: Spring Boot 3.3.6 resolves ${KAFKA_TLS_CA} and
+${MONGODB_URI} from the env names KAFKA_TLS_CA and MONGODB_URI, not from
+kafka.tls.ca, Kafka_Tls_Ca or mongodb.uri, so any other spelling
+((?i)^kafka[._-]?tls([._-]|$) and (?i)^mongodb[._-]?uri$, also in canonical
+form) is refused on every route, and every spelling is refused under config.
+(These names are read only as ${NAME} placeholders, not bound through
+relaxed binding, so fbx.propertyName adds nothing here.)
+JVM options cannot set them (-DKAFKA_TLS_CA or -DMONGODB_URI would win over
+the environment): fbx.validateJvmOptions refuses kafka and mongodb.
+fbx.secretOnlyName prints "exact" for an allowed spelling, "other" for
+another spelling of such a name, nothing otherwise; fbx.secretOnlyReason
+prints the reason for the name's family.
+*/}}
+{{- define "fbx.secretOnlyName" -}}
+{{- $n := toString . -}}
+{{- if or (regexMatch "(?i)^kafka[._-]?tls([._-]|$)" $n) (regexMatch "^kafka\\.?tls(\\.|$)" (include "fbx.canonicalName" $n)) -}}
+{{- if has $n (list "KAFKA_TLS_CERT" "KAFKA_TLS_KEY" "KAFKA_TLS_CA") -}}exact{{- else -}}other{{- end -}}
+{{- else if or (regexMatch "(?i)^mongodb[._-]?uri$" $n) (regexMatch "^mongodb\\.?uri$" (include "fbx.canonicalName" $n)) -}}
+{{- if eq $n "MONGODB_URI" -}}exact{{- else -}}other{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "fbx.secretOnlyReason" -}}
+{{- if regexMatch "(?i)^mongodb" (include "fbx.canonicalName" .) -}}
+MONGODB_URI is the DocumentDB connection string (credentials and TLS options) the services read as ${MONGODB_URI}; it comes only from a Secret, under exactly this name: an extraEnv valueFrom.secretKeyRef or an externalSecret data/extraData key
+{{- else -}}
+KAFKA_TLS_CERT, KAFKA_TLS_KEY and KAFKA_TLS_CA carry the Kafka client certificate, key and cluster CA the kafka-strimzi profile reads as ${KAFKA_TLS_*}; they come only from a Secret, under exactly these names: an extraEnv valueFrom.secretKeyRef (the Kafka repo's client guide maps them from Secret kafka-client-tls) or an externalSecret data/extraData key
+{{- end -}}
+{{- end -}}
+
+{{- define "fbx.validateSecretNames" -}}
+{{- range $name, $value := .Values.config -}}
+{{- if include "fbx.secretOnlyName" $name -}}
+{{- fail (printf "config.%s is not allowed: %s" $name (include "fbx.secretOnlyReason" $name)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $env := .Values.extraEnv -}}
+{{- $envName := toString (default "" ($env | default dict).name) -}}
+{{- $kind := include "fbx.secretOnlyName" $envName -}}
+{{- $why := include "fbx.secretOnlyReason" $envName -}}
+{{- if eq $kind "other" -}}
+{{- fail (printf "extraEnv %s is not allowed: %s" $envName $why) -}}
+{{- else if eq $kind "exact" -}}
+{{- $from := $env.valueFrom -}}
+{{- if or (hasKey $env "value") (not (kindIs "map" $from)) (ne (len ($from | default dict)) 1) (not (hasKey ($from | default dict) "secretKeyRef")) -}}
+{{- fail (printf "extraEnv %s must come from valueFrom.secretKeyRef alone (no value, configMapKeyRef, fieldRef or resourceFieldRef): %s" $envName $why) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $es := .Values.externalSecret | default dict -}}
+{{- if $es.enabled -}}
+{{- range $field := list "data" "extraData" -}}
+{{- range $entry := (index $es $field | default list) -}}
+{{- $key := toString (default "" ($entry | default dict).secretKey) -}}
+{{- if eq (include "fbx.secretOnlyName" $key) "other" -}}
+{{- fail (printf "externalSecret.%s %s is not allowed: %s" $field $key (include "fbx.secretOnlyReason" $key)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

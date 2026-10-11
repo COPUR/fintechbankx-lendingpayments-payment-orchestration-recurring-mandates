@@ -55,7 +55,7 @@ networkPolicy:
 # Extra environment entries for the API pods (Kubernetes EnvVar objects, e.g.
 # {name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70"}). Kubernetes env wins
 # over the ConfigMap's envFrom, so the platform guard (templates/_fbx_helpers.tpl,
-# cicd-templates a4f0072 fbx.guard, called by templates/_helpers.tpl mandates.guard)
+# cicd-templates 6b6c317 fbx.guard, called by templates/_helpers.tpl mandates.guard)
 # checks every entry: no DB_URL in any spelling (value or valueFrom); no Spring
 # datasource, Flyway, Liquibase or R2DBC property (SPRING_DATASOURCE_USERNAME and
 # SPRING_DATASOURCE_PASSWORD excepted), spring.application.json, jdbc_url,

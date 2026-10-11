@@ -76,12 +76,15 @@ Round 6, guardrail 4a: no values override may move the service off the checked
 JDBC URL, activate another profile or switch the startup TLS assertion off.
 
 The guard is the platform's, vendored unchanged as templates/_fbx_helpers.tpl
-(cicd-templates a4f0072, charts/fintechbankx-service/templates/_helpers.tpl,
-sha256 pinned in the README and in deployability.yml). fbx.guard reads only
+(cicd-templates 6b6c317, charts/fintechbankx-service/templates/_helpers.tpl,
+sha256 pinned in the README and in deployability.yml, checked by
+scripts/ci/verify-vendored-guard.sh). fbx.guard reads only
 .Values, so mandates.guard passes it an adapter built from this chart's values
 (README of that chart, "Vendoring the guard"): config, extraEnv, envFrom and
 extraEnvFrom (not rendered by this chart, mapped so a stray value is refused
-rather than ignored), javaToolOptions (none here), databaseCa = rdsCaBundle,
+rather than ignored), javaToolOptions (none here), databaseCa = rdsCaBundle (enabled, mountPath, key and
+configMapName; the guard pins them to /etc/fintechbankx/rds-ca, global-bundle.pem and
+rds-ca-bundle and requires configMapName),
 kafka.runtime = kafka.profile mapped (kafka-msk -> msk, kafka-strimzi ->
 strimzi) and externalSecret = the fixed keys of the chart's two ExternalSecrets
 (externalsecret.yaml, migration-job.yaml) plus a dataFrom value, if ever set,
@@ -92,22 +95,27 @@ spring.ssl.*, ssl bundle, sslmode/sslrootcert (DB_SSL_ROOT_CERT) and
 fintechbankx.tls.* names in any spelling (relaxed-binding canonical form),
 JVM option values (literal only, no file, no TLS, datasource, profile or
 config word, no $( or ${), $( in extraEnv values, envFrom/dataFrom, key and
-name shapes, and every *security.protocol or *endpoint.identification.algorithm
-value against kafka.runtime (SASL_SSL with msk, SSL with strimzi, https).
+name shapes, the Kafka client TLS names (spring.kafka.ssl.*,
+spring.kafka.properties.ssl.*, per-client forms), KAFKA_TLS_* and MONGODB_URI (Secret only),
+spring.data.mongodb.* and kafka or mongodb in a JVM option (all also with '_' inside an
+element), and every *security.protocol or *endpoint.identification.algorithm value
+against kafka.runtime (SASL_SSL with msk, SSL with strimzi, https).
 
 Kept here because fbx.guard does not do them:
   - mandates.kafkaRuntime: kafka.profile is required and must be exactly
     kafka-msk or kafka-strimzi (fbx.kafkaProfile would render no profile for
     an empty runtime; this service needs one), and the ConfigMap renders
     KAFKA_SECURITY_PROTOCOL from it unless config sets it;
-  - mandates.refusedEnvName: spring.kafka.*security.protocol and
-    spring.kafka.properties.* names are refused outright (fbx.guard checks a
-    security.protocol value, not the name, and does not see
-    spring.kafka.properties.sasl.* at all); checked on the name as given and on
-    fbx.canonicalName;
+  - mandates.refusedEnvName: spring.kafka.*security.protocol names are refused
+    outright (fbx.guard checks a security.protocol value, not the name) and so
+    is the whole spring.kafka.properties.* prefix, because fbx.guard refuses
+    only spring.kafka.properties.ssl.* and lets spring.kafka.properties.sasl.*
+    through; checked on the name as given and on fbx.canonicalName. The guard's
+    message fires first for the ssl names;
   - mandates.validateJvmWords: a JVM option value may not mention fintechbankx
-    or kafka at all (fbx.validateJvmOptions refuses fintechbankx.tls and
-    security.protocol; this is the wider word rule of round 6).
+    at all (fbx.validateJvmOptions refuses fintechbankx.tls but not other
+    fintechbankx.* properties; kafka and mongodb are now refused by the guard
+    itself, so the chart rule no longer repeats them).
 Usage: include "mandates.guard" . at the top of deployment.yaml and migration-job.yaml.
 */ -}}
 {{- define "mandates.guard" -}}
@@ -145,7 +153,7 @@ entries carry the remoteSecretName values so fbx.validateKeyNames sees them.
       "envFrom" (.Values.envFrom | default list)
       "extraEnvFrom" (.Values.extraEnvFrom | default list)
       "javaToolOptions" ""
-      "databaseCa" (dict "enabled" true "mountPath" .Values.rdsCaBundle.mountPath "key" .Values.rdsCaBundle.key)
+      "databaseCa" (dict "enabled" true "mountPath" .Values.rdsCaBundle.mountPath "key" .Values.rdsCaBundle.key "configMapName" .Values.rdsCaBundle.configMapName)
       "kafka" (dict "runtime" (include "mandates.kafkaRuntime" .))
       "externalSecret" (dict "enabled" true
         "data" (list
@@ -195,7 +203,7 @@ it can move the Kafka client off SASL_SSL/SSL or change its SASL settings; the K
 Words this chart refuses in a JVM option value on top of fbx.validateJvmOptions.
 */ -}}
 {{- define "mandates.validateJvmWords" -}}
-{{- if regexMatch "(?i)fintechbankx|kafka" (toString .value) -}}
-{{- fail (printf "%s must not mention fintechbankx or kafka (a JVM system property would switch the startup TLS assertion off or move the Kafka client off TLS)" .where) -}}
+{{- if regexMatch "(?i)fintechbankx" (toString .value) -}}
+{{- fail (printf "%s must not mention fintechbankx (a JVM system property would switch the startup TLS assertion off)" .where) -}}
 {{- end -}}
 {{- end -}}
