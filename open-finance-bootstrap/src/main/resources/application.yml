@@ -81,12 +81,16 @@ spring:
       # client-credentials token, never the TPP's token.
       client:
         registration:
+          # The accounts ledger (mandates.accounts.client-registration-id). The optional client
+          # scope aud-svc-acc-accounts-ledger puts svc-acc-accounts-ledger in aud;
+          # only this registration requests it.
           accounts-service:
             provider: fintechbankx
             client-id: ${SERVICE_CLIENT_ID:svc-pay-recurring-mandates}
             client-secret: ${SERVICE_CLIENT_SECRET:}
             authorization-grant-type: client_credentials
             client-authentication-method: client_secret_basic
+            scope: aud-svc-acc-accounts-ledger
           consent-service:
             provider: fintechbankx
             client-id: ${SERVICE_CLIENT_ID:svc-pay-recurring-mandates}
