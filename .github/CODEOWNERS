@@ -11,9 +11,13 @@
 # AsyncAPI breaking-change waivers need an owner review (cicd-templates 13d09a1).
 **/*.accepted-breaking.txt @COPUR
 
-# Guardrail 4a: the vendored platform guard (cicd-templates 6b6c317), its verifier, the workflow
+# Guardrail 4a: the vendored platform guard (cicd-templates 73e1881), its verifier, the workflow
 # that pins the guard's sha256, and this file. Takes effect once code-owner review is required.
 /deploy/helm/payment-recurring-mandates-service/templates/_fbx_helpers.tpl @COPUR
 /scripts/ci/verify-vendored-guard.sh @COPUR
 /.github/workflows/deployability.yml @COPUR
 /.github/CODEOWNERS @COPUR
+# Guardrail 4a (cicd-templates 73e1881): the CI workflows, the exemption file and the fixture check.
+/.github/workflows/ @COPUR
+/.github/guardrail-exemptions.txt @COPUR
+/scripts/ci/check-guardrail-fixtures.sh @COPUR

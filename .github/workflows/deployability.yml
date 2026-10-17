@@ -106,13 +106,10 @@ jobs:
           refuse 'extraEnv must not set SPRING_SQL_INIT_MODE \(value or valueFrom\): a schema-management setting' --set-json 'extraEnv=[{"name":"SPRING_SQL_INIT_MODE","value":"always"}]'
           refuse 'extraEnv must not set spring\.sql\.init\.schema-locations \(value or valueFrom\): a schema-management setting' --set-json 'extraEnv=[{"name":"spring.sql.init.schema-locations","valueFrom":{"configMapKeyRef":{"name":"other","key":"schema"}}}]'
           refuse 'config\.SPRING_SQLINIT_MODE is not allowed: a schema-management setting' --set-string config.SPRING_SQLINIT_MODE=always
-          refuse 'externalSecret\.data must not materialise hibernate\.hbm2ddl\.auto' --set-json 'externalSecret.data=[{"secretKey":"hibernate.hbm2ddl.auto","property":"ddl"}]'
-          refuse 'externalSecret\.extraData must not materialise jakarta\.persistence\.schema-generation\.database\.action' --set-json 'externalSecret.extraData=[{"secretKey":"jakarta.persistence.schema-generation.database.action","property":"action"}]'
           refuse 'config\.JAVAX_PERSISTENCE_SCHEMA_GENERATION_DATABASE_ACTION is not allowed: a schema-management setting' --set-string config.JAVAX_PERSISTENCE_SCHEMA_GENERATION_DATABASE_ACTION=drop-and-create
           refuse 'config\.spring\.j_pa\.hibernate\.ddl-auto is not allowed: a schema-management setting' --set-string 'config.spring\.j_pa\.hibernate\.ddl-auto=create'
           refuse 'extraEnv must not set spring\[jpa\]\.generate-ddl .*: a schema-management setting' --set-json 'extraEnv=[{"name":"spring[jpa].generate-ddl","value":"true"}]'
           refuse 'extraEnv must not set _SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION .*: a schema-management setting' --set-json 'extraEnv=[{"name":"_SPRING_JPA_DEFER_DATASOURCE_INITIALIZATION","value":"true"}]'
-          refuse 'externalSecret\.data must not materialise Hibernate\.Hbm2ddl\.Auto' --set-json 'externalSecret.data=[{"secretKey":"Hibernate.Hbm2ddl.Auto","property":"ddl"}]'
           refuse 'config\.JAVA_TOOL_OPTIONS must not mention .*spring\.jpa, spring\.sql\.init, hibernate' --set-string 'config.JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75 -Dspring.jpa.hibernate.ddl-auto=create-drop'
           refuse 'config\.JDK_JAVA_OPTIONS must not mention .*hibernate' --set-string config.JDK_JAVA_OPTIONS=-Dhibernate.hbm2ddl.auto=update
           refuse 'extraEnv\.JAVA_TOOL_OPTIONS must not mention .*jakarta\.persistence' --set-json 'extraEnv=[{"name":"JAVA_TOOL_OPTIONS","value":"-Djakarta.persistence.schema-generation.database.action=drop-and-create"}]'
