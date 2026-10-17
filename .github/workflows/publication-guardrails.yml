@@ -14,7 +14,14 @@ jobs:
       - name: Detect local path or identity leakage
         run: |
           set -euo pipefail
-          if rg -n "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**'; then
+          command -v rg >/dev/null || { echo "ripgrep is not installed on this runner; the path scan cannot run"; exit 1; }
+          set +e
+          found="$(rg -n "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**')"
+          rc=$?
+          set -e
+          [ "$rc" -le 1 ] || { echo "path scan failed (rg exit $rc)"; exit 1; }
+          if [ -n "$found" ]; then
+            printf '%s\n' "$found"
             echo "Local path / identity leakage detected"
             exit 1
           fi
@@ -27,14 +34,37 @@ jobs:
       - name: Scan secret-like patterns
         run: |
           set -euo pipefail
-          PATTERN='BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key|password\s*[:=]'
-          # A password set to a placeholder (<...>, ${...} or var.name) or to a boolean (for example
-          # manage_master_user_password = true, an RDS-managed secret) is not a secret.
-          PLACEHOLDER='password\s*[:=]\s*["\x27]?(<|\$\{|var\.|(true|false)\b)'
-          if rg -n "$PATTERN" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' | rg -v "$PLACEHOLDER"; then
+          command -v rg >/dev/null || { echo "ripgrep is not installed on this runner; the secret scan cannot run"; exit 1; }
+          # MATCH is what is checked, one match at a time: a password's value, or a key shape.
+          MATCH='password\s*[:=]\s*["\x27]?[^ \t"\x27,;#]*|BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key'
+          # A password whose whole value is a placeholder (<...>, ${...}, var.name) or a boolean (for example
+          # manage_master_user_password = true, an RDS-managed secret) is not a secret. A placeholder elsewhere
+          # on the same line does not hide a real value: "password: hunter2 # <note>" is still a hit.
+          PLACEHOLDER='password\s*[:=]\s*["\x27]?(<[^>"\x27]*>|\$\{.*\}|var\.[A-Za-z0-9_.]+|true|false)["\x27]?\s*$'
+          # hits PATH...: the matches that are not placeholders. A ripgrep error stops the step.
+          hits() {
+            local out rc
+            set +e
+            out="$(rg -no "$MATCH" "$@" --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**')"
+            rc=$?
+            set -e
+            [ "$rc" -le 1 ] || { echo "secret scan failed (rg exit $rc)"; exit 1; }
+            [ -z "$out" ] || printf '%s\n' "$out" | rg -v "$PLACEHOLDER" || true
+          }
+          # Fixtures: the scan must flag the first file and pass the second.
+          fixtures="$(mktemp -d)"
+          trap 'rm -rf "$fixtures"' EXIT
+          printf 'password: hunter2 # <note>\n' > "$fixtures/must-hit.yaml"
+          printf 'password: <placeholder>\npassword = var.db_password\npassword: ${DB_PASSWORD}\nmanage_master_user_password = true\n' > "$fixtures/must-skip.tf"
+          [ -n "$(hits "$fixtures/must-hit.yaml")" ] || { echo "secret scan fixture: a known hit was not flagged"; exit 1; }
+          [ -z "$(hits "$fixtures/must-skip.tf")" ] || { echo "secret scan fixture: a placeholder or boolean was flagged"; exit 1; }
+          found="$(hits .)"
+          if [ -n "$found" ]; then
+            printf '%s\n' "$found"
             echo "Potential secret pattern detected"
             exit 1
           fi
+
 
   readme-doc-link-check:
     runs-on: ubuntu-latest
