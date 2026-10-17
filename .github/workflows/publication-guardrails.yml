@@ -27,8 +27,11 @@ jobs:
       - name: Scan secret-like patterns
         run: |
           set -euo pipefail
-          PATTERN='BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key|password\\s*[:=]'
-          if rg -n "$PATTERN" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**'; then
+          PATTERN='BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key|password\s*[:=]'
+          # A password set to a placeholder (<...>, ${...} or var.name) or to a boolean (for example
+          # manage_master_user_password = true, an RDS-managed secret) is not a secret.
+          PLACEHOLDER='password\s*[:=]\s*["\x27]?(<|\$\{|var\.|(true|false)\b)'
+          if rg -n "$PATTERN" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' | rg -v "$PLACEHOLDER"; then
             echo "Potential secret pattern detected"
             exit 1
           fi
