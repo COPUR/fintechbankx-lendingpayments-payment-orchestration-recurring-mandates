@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Install ripgrep if the runner lacks it
+        run: |
+          command -v rg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep; }
       - name: Detect local path or identity leakage
         run: |
           set -euo pipefail
@@ -31,6 +34,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Install ripgrep if the runner lacks it
+        run: |
+          command -v rg >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep; }
       - name: Scan secret-like patterns
         run: |
           set -euo pipefail
