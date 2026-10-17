@@ -128,11 +128,9 @@ final class PostgresTestDatabase {
         return value == null || value.isBlank() ? fallback : value;
     }
 
+    /** Empty when unset: the CI service container runs with trust authentication. */
     private static String env(String name) {
         String value = System.getenv(name);
-        if (value == null || value.isBlank()) {
-            throw new IllegalStateException(name + " must be set when TEST_DB_URL points at an external database");
-        }
-        return value;
+        return value == null || value.isBlank() ? "" : value;
     }
 }

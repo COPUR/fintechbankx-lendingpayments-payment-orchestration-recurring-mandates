@@ -87,6 +87,36 @@ class AccountsServiceHttpAdapterTest {
     }
 
     @Test
+    void readsTheLedgerAccountShapeForActiveFrozenAndClosedAccounts() {
+        server.expect(requestTo("http://accounts.test/api/v1/accounts/ACC-L1"))
+                .andRespond(withSuccess("""
+                        {"accountId":"ACC-L1","customerId":"CUST-1","category":"CUSTOMER","accountType":"SAVINGS",
+                         "status":"ACTIVE","currency":"AED","availableBalance":500.00,"bookedBalance":500.00,
+                         "debitAllowed":true,"creditAllowed":true,"islamicCompliant":true,
+                         "openedAt":"2026-10-01T09:00:00Z","updatedAt":"2026-10-17T12:00:00Z"}
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://accounts.test/api/v1/accounts/ACC-L2"))
+                .andRespond(withSuccess("""
+                        {"accountId":"ACC-L2","category":"INTERNAL","accountType":"INTERNAL","status":"FROZEN",
+                         "currency":"AED","availableBalance":0,"bookedBalance":0,"debitAllowed":false,
+                         "creditAllowed":false,"islamicCompliant":false,
+                         "openedAt":"2026-10-01T09:00:00Z","updatedAt":"2026-10-17T12:00:00Z"}
+                        """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://accounts.test/api/v1/accounts/ACC-L3"))
+                .andRespond(withSuccess("""
+                        {"accountId":"ACC-L3","customerId":"CUST-2","category":"CUSTOMER","accountType":"CURRENT",
+                         "status":"CLOSED","currency":"AED","availableBalance":0,"bookedBalance":0,
+                         "debitAllowed":false,"creditAllowed":false,"islamicCompliant":false,
+                         "openedAt":"2026-10-01T09:00:00Z","updatedAt":"2026-10-17T12:00:00Z"}
+                        """, MediaType.APPLICATION_JSON));
+
+        assertThat(adapter.findDebtorAccount("ACC-L1")).contains(new DebtorAccount("ACC-L1", true, true, "AED"));
+        assertThat(adapter.findDebtorAccount("ACC-L2")).contains(new DebtorAccount("ACC-L2", false, false, "AED"));
+        assertThat(adapter.findDebtorAccount("ACC-L3")).contains(new DebtorAccount("ACC-L3", false, false, "AED"));
+        server.verify();
+    }
+
+    @Test
     void inMemoryDemoAccounts() {
         InMemoryDebtorAccountAdapter demo = new InMemoryDebtorAccountAdapter();
 

@@ -24,12 +24,10 @@ import java.util.function.Supplier;
  * ignored. Calls carry this service's own client-credentials token. Fails
  * closed: errors other than 404 propagate and the request is refused (503).
  *
- * Interim: no system serves this contract to services today. The monolith's
- * only account read is the TPP-facing AIS endpoint GET
- * /open-finance/v1/accounts/{accountId}, which needs a PSU's AIS consent and a
- * DPoP-bound TPP token and has no debit flag, so it cannot be called with a
- * service token. Base URL and path are configurable so the system of record
- * can be wired in without a code change.
+ * Served by svc-acc-accounts-ledger (ADR-030). The monolith's only account read
+ * is the TPP-facing AIS endpoint, which needs a PSU's consent and a DPoP-bound
+ * TPP token, so it cannot be called with a service token. Base URL and path
+ * stay configurable.
  */
 public class AccountsServiceHttpAdapter implements DebtorAccountPort {
 

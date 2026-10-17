@@ -42,7 +42,7 @@ jobs:
         env:
           POSTGRES_DB: db_pay_recurring_mandates_test
           POSTGRES_USER: mandates_test
-          POSTGRES_PASSWORD: ${{ secrets.CI_DB_PASSWORD }}
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -55,7 +55,6 @@ jobs:
       # against this database; with CI=true they fail (not skip) if it is missing.
       TEST_DB_URL: jdbc:postgresql://localhost:5432/db_pay_recurring_mandates_test
       TEST_DB_USERNAME: mandates_test
-      TEST_DB_PASSWORD: ${{ secrets.CI_DB_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
