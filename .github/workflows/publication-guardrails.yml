@@ -32,7 +32,7 @@ jobs:
           export PATH="$RG_DIR/${rg_asset}:$PATH"
           command -v rg >/dev/null || { echo "ripgrep (rg) is required on this runner"; exit 1; }
           status=0
-          rg -n "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' || status=$?
+          rg -n --hidden "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' --glob '!.github/workflows/publication-guardrails.yml' || status=$?
           case $status in
             0) echo "Local path / identity leakage detected"; exit 1 ;;
             1) ;;
@@ -44,6 +44,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Check the scan against its fixtures
+        run: bash scripts/ci/check-guardrail-fixtures.sh .github/workflows/publication-guardrails.yml
       - name: Scan secret-like patterns
         run: |
           set -euo pipefail
@@ -61,60 +63,55 @@ jobs:
           tar -xz -C "$RG_DIR" -f "$RG_DIR/rg.tar.gz"
           export PATH="$RG_DIR/${rg_asset}:$PATH"
           command -v rg >/dev/null || { echo "ripgrep (rg) is required on this runner"; exit 1; }
-          EXCLUDES=(--glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**')
+          EXCLUDES=(--glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' --glob '!.github/guardrail-exemptions.txt')
           found=0
+
+          # An exemption is a line of .github/guardrail-exemptions.txt: file, TAB, the exact line text, TAB, a reason.
+          # A hit is dropped only when its file and its whole line are listed, so the same shape on another line still fails.
+          unexempt() {
+            local hit file rest n text
+            while IFS= read -r hit; do
+              file=${hit#./}; file=${file%%:*}
+              rest=${hit#*:}; n=${rest%%:*}
+              text=$(sed -n "${n}p" "$file")
+              if [ -f .github/guardrail-exemptions.txt ] && F="$file" T="$text" awk -F'\t' '$1 == ENVIRON["F"] && $2 == ENVIRON["T"] { found = 1 } END { exit !found }' .github/guardrail-exemptions.txt; then
+                continue
+              fi
+              printf '%s\n' "$hit"
+            done
+          }
 
           # Key material and token formats: no placeholder exemption.
           status=0
-          hits=$(rg -n 'BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key' . "${EXCLUDES[@]}") || status=$?
+          hits=$(rg -n --hidden 'BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key' . "${EXCLUDES[@]}") || status=$?
           case $status in
-            0) echo "$hits"; found=1 ;;
+            0) hits=$(printf '%s\n' "$hits" | unexempt); if [ -n "$hits" ]; then echo "$hits"; found=1; fi ;;
             1) ;;
             *) echo "rg failed with exit $status"; exit "$status" ;;
           esac
 
-          # A password value is tested one match at a time. An empty value, a placeholder (<name>, ${NAME}, ${NAME:}, ${NAME:-},
-          # ${NAME:?message}, a nested ${...} default, var.name, env.NAME), an environment or Terraform reference (env(...),
-          # System.getenv(...), a getter x.getPassword(), resource.name.attr), a Helm action {{ ... }} or a whole boolean (true or false)
-          # is not a secret.
-          # Any other value is reported, including a literal shell default such as ${NAME:-value} or ${NAME:=value}, a value
-          # glued to a placeholder such as ${NAME}abc, and a key whose name ends in password (DB_PASSWORD, dbPassword, PGPASSWORD).
-          PLACEHOLDER='password\s*[:=]\s*[\x22\x27]?(<[A-Za-z0-9_. -]+>|\$\{[A-Za-z_][A-Za-z0-9_.-]*(:(\$\{[A-Za-z0-9_.:-]*\})?|:-)?\}|\$\{[A-Za-z_][A-Za-z0-9_.-]*:\?[^\s}]*\}?|-\}|var\.[A-Za-z_][A-Za-z0-9_]*|env\.[A-Za-z_][A-Za-z0-9_]*|env\([^)]*\)|[A-Za-z_.]*[Gg]etenv\([^)]*\)|[A-Za-z_][A-Za-z0-9_.]*\.[Gg]et[A-Za-z0-9_]*\([^)]*\)|[a-z]+(_[a-z0-9]+)+\.[A-Za-z][A-Za-z0-9_-]*\.[a-z_]+|true|false|\{\{([^\s}]*\}\})?)?[\x22\x27]?\s*$'
+          # A password value is tested from its key to the end of its line, and the placeholder test is anchored to that match.
+          # The value must be a placeholder all the way to a closing quote or backtick, an end of statement or a trailing comment:
+          # an empty value, <name>, ${NAME}, ${NAME:}, ${NAME:-}, ${NAME:?message}, a nested ${...} default, var.name, env.NAME,
+          # env(NAME), System.getenv(NAME), x.getPassword(), resource.name.attr, a Helm action or a whole boolean (true or false).
+          # Anything else is reported: a literal default such as ${NAME:-value}, a literal after an operator, and a key whose
+          # name ends in password, quoted or not (DB_PASSWORD, dbPassword, PGPASSWORD, "password").
+          PLACEHOLDER='^\./[^:]*:[0-9]+:[A-Za-z0-9_.-]*password[\x22\x27\x60]?\s*[:=]\s*[\x22\x27\x60]?((<[A-Za-z0-9_. -]+>|\$\{[A-Za-z_][A-Za-z0-9_.-]*(:(\$\{[A-Za-z0-9_.:-]*\})?|:-)?\}|\$\{[A-Za-z_][A-Za-z0-9_.-]*:\?[^}]*\}|-\}|var\.[A-Za-z_][A-Za-z0-9_]*|(?-i:env\.[A-Z][A-Z0-9_]*)|env\([^,)]*\)|[A-Za-z_.]*[Gg]etenv\([^,)]*\)|[A-Za-z_][A-Za-z0-9_.]*\.[Gg]et[A-Za-z0-9_]*\(\)|(?-i:[a-z]+(_[a-z0-9]+)+\.[A-Za-z][A-Za-z0-9_-]*\.[a-z_]+)|true|false|\{\{[^}]*\}\})[\x22\x27\x60]?[ \t]*[},;)]*[ \t]*([ \t]+#.*)?|[\x22\x27\x60]?[ \t]*)$'
           status=0
-          values=$(rg -i -o -n '[A-Za-z0-9_.-]*password\s*[:=]\s*[^\s,;#\x60]*' . "${EXCLUDES[@]}") || status=$?
+          values=$(rg -i -o -n --hidden '[A-Za-z0-9_.-]*password[\x22\x27\x60]?\s*[:=].*' . "${EXCLUDES[@]}") || status=$?
           case $status in
             0) ;;
             1) values= ;;
             *) echo "rg failed with exit $status"; exit "$status" ;;
           esac
-          # Narrow exemptions for literal test values. One entry per line: the file path, a colon, then the matched text
-          # as rg reports it, without the line number. Any other line still hits. Reasons, in the same order as the entries:
-          # the runtime role is created with "if not exists", so a rerun against a persistent TEST_DB_URL needs a stable value (mandates PostgresTestDatabase).
-          # the TEST_DB_PASSWORD fallback keeps the documented local command working when the variable is unset.
-          # a deliberately wrong migration password that the migration must refuse; the value is not a credential.
-          EXEMPT=$(mktemp)
-          cat > "$EXEMPT" <<'EXEMPT_LIST'
-          ./open-finance-bootstrap/src/test/java/com/enterprise/openfinance/recurringpayments/PostgresTestDatabase.java:RUNTIME_PASSWORD = "mandates_runtime_it"
-          ./open-finance-bootstrap/src/test/java/com/enterprise/openfinance/recurringpayments/PostgresTestDatabase.java:ownerPassword = env("TEST_DB_PASSWORD"
-          ./open-finance-bootstrap/src/test/java/com/enterprise/openfinance/recurringpayments/DatabaseMigrationIT.java:--DB_MIGRATION_PASSWORD=wrong-password"
-          EXEMPT_LIST
-
           if [ -n "$values" ]; then
             status=0
             kept=$(printf '%s\n' "$values" | rg -v -i -e "$PLACEHOLDER") || status=$?
             case $status in
-              0) ;;
-              1) kept= ;;
+              0) kept=$(printf '%s\n' "$kept" | unexempt); if [ -n "$kept" ]; then echo "$kept"; found=1; fi ;;
+              1) ;;
               *) echo "rg failed with exit $status"; exit "$status" ;;
             esac
-            while IFS= read -r hit; do
-              [ -n "$hit" ] || continue
-              key=$(printf '%s' "$hit" | sed -E 's/^([^:]+):[0-9]+:/\1:/')
-              if ! grep -qxF -- "$key" "$EXEMPT"; then
-                echo "$hit"
-                found=1
-              fi
-            done <<< "$kept"
           fi
 
           if [ "$found" -ne 0 ]; then

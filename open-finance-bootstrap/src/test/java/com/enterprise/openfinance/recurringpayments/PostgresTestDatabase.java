@@ -102,7 +102,7 @@ final class PostgresTestDatabase {
         if (hasExternalDatabase()) {
             url = System.getenv("TEST_DB_URL");
             ownerUser = env("TEST_DB_USERNAME", "mandates_test");
-            ownerPassword = env("TEST_DB_PASSWORD", "mandates_test");
+            ownerPassword = env("TEST_DB_PASSWORD");
         } else {
             container = new PostgreSQLContainer<>("postgres:16-alpine")
                     .withDatabaseName("db_pay_recurring_mandates_test")
@@ -126,5 +126,13 @@ final class PostgresTestDatabase {
     private static String env(String name, String fallback) {
         String value = System.getenv(name);
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static String env(String name) {
+        String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(name + " must be set when TEST_DB_URL points at an external database");
+        }
+        return value;
     }
 }

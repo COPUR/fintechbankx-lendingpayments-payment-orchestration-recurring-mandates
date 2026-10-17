@@ -42,7 +42,7 @@ jobs:
         env:
           POSTGRES_DB: db_pay_recurring_mandates_test
           POSTGRES_USER: mandates_test
-          POSTGRES_PASSWORD: mandates_test
+          POSTGRES_PASSWORD: ${{ secrets.CI_DB_PASSWORD }}
         ports:
           - 5432:5432
         options: >-
@@ -55,7 +55,7 @@ jobs:
       # against this database; with CI=true they fail (not skip) if it is missing.
       TEST_DB_URL: jdbc:postgresql://localhost:5432/db_pay_recurring_mandates_test
       TEST_DB_USERNAME: mandates_test
-      TEST_DB_PASSWORD: mandates_test
+      TEST_DB_PASSWORD: ${{ secrets.CI_DB_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -165,8 +165,15 @@ jobs:
         shell: bash
         run: |
           tmpdir="$(mktemp -d)"
-          curl -sSfL https://github.com/oasdiff/oasdiff/releases/download/v1.12.1/oasdiff_1.12.1_linux_amd64.tar.gz \
-            | tar -xz -C "$tmpdir"
+          # Pick the asset by runner architecture and check it against the release's sha256 before extracting.
+          case "$(uname -m)" in
+            x86_64) oasdiff_arch=amd64; oasdiff_sha=85514a6044d9cce53816b3558b17be4f784e481e43bf345b1029a6ccc5c0e439 ;;
+            aarch64|arm64) oasdiff_arch=arm64; oasdiff_sha=eff7c6d6d361fc29085925f6871d8b41406baadede6b87a4a055a2b640ac8a05 ;;
+            *) echo "unsupported runner architecture $(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o "$tmpdir/oasdiff.tar.gz" "https://github.com/oasdiff/oasdiff/releases/download/v1.12.1/oasdiff_1.12.1_linux_${oasdiff_arch}.tar.gz"
+          echo "${oasdiff_sha}  $tmpdir/oasdiff.tar.gz" | sha256sum -c -
+          tar -xz -C "$tmpdir" -f "$tmpdir/oasdiff.tar.gz"
           sudo install "$tmpdir/oasdiff" /usr/local/bin/oasdiff
           rm -rf "$tmpdir"
 
@@ -202,8 +209,15 @@ jobs:
         shell: bash
         run: |
           tmpdir="$(mktemp -d)"
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
-            | tar -xz -C "$tmpdir"
+          # Pick the asset by runner architecture and check it against the release's sha256 before extracting.
+          case "$(uname -m)" in
+            x86_64) gitleaks_arch=x64; gitleaks_sha=9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c ;;
+            aarch64|arm64) gitleaks_arch=arm64; gitleaks_sha=5f2edbe1f49f7b920f9e06e90759947d3c5dfc16f752fb93aaafc17e9d14cf07 ;;
+            *) echo "unsupported runner architecture $(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o "$tmpdir/gitleaks.tar.gz" "https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_${gitleaks_arch}.tar.gz"
+          echo "${gitleaks_sha}  $tmpdir/gitleaks.tar.gz" | sha256sum -c -
+          tar -xz -C "$tmpdir" -f "$tmpdir/gitleaks.tar.gz"
           sudo install "$tmpdir/gitleaks" /usr/local/bin/gitleaks
           rm -rf "$tmpdir"
 
