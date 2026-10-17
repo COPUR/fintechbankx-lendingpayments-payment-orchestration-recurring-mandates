@@ -44,7 +44,9 @@ jobs:
           POSTGRES_USER: mandates_test
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
-          - 5432:5432
+          # Loopback only, on a random host port: another job on the shared fbx-ci Docker host cannot
+          # reach this trust-auth database, and two jobs never claim the same port. Read in the first step.
+          - "127.0.0.1::5432"
         options: >-
           --health-cmd "pg_isready -U mandates_test -d db_pay_recurring_mandates_test"
           --health-interval 5s
@@ -53,9 +55,12 @@ jobs:
     env:
       # open-finance-bootstrap integration tests run Flyway and the whole service
       # against this database; with CI=true they fail (not skip) if it is missing.
-      TEST_DB_URL: jdbc:postgresql://localhost:5432/db_pay_recurring_mandates_test
+      # TEST_DB_URL is set from the mapped port in the first step.
       TEST_DB_USERNAME: mandates_test
     steps:
+      - name: Point tests at the service container's mapped port
+        run: echo "TEST_DB_URL=jdbc:postgresql://localhost:${{ job.services.postgres.ports['5432'] }}/db_pay_recurring_mandates_test" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
