@@ -114,8 +114,9 @@ config:
   CONSENT_SERVICE_BASE_URL: http://consent-authorization-service.open-finance.svc.cluster.local:8080
   # svc-acc-accounts-ledger (ADR-030): GET /api/v1/accounts/{accountId} with this service's
   # client-credentials token. A mandate whose debtor account cannot be read fails closed with 503.
+  # required: in the cluster, http://accounts-ledger-service.corebanking.svc.cluster.local:8080
   ACCOUNTS_ADAPTER: http
-  ACCOUNTS_SERVICE_BASE_URL: http://accounts-ledger-service.corebanking.svc.cluster.local:8080
+  ACCOUNTS_SERVICE_BASE_URL: ""   # required: accounts API base URL
   ACCOUNTS_SERVICE_PATH: /api/v1/accounts/{accountId}
   OUTBOX_RELAY_ENABLED: "false"   # enable once evt.pay.mandate.v1 exists on the cluster
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://otel-collector.observability.svc.cluster.local:4318/v1/traces
