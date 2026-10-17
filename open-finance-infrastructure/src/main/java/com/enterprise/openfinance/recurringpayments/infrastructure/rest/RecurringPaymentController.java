@@ -3,6 +3,7 @@ package com.enterprise.openfinance.recurringpayments.infrastructure.rest;
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
+import com.enterprise.openfinance.recurringpayments.domain.model.Money;
 import com.enterprise.openfinance.recurringpayments.domain.port.in.RecurringPaymentUseCase;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpConsentQuery;
 import com.enterprise.openfinance.recurringpayments.domain.query.GetVrpPaymentQuery;
@@ -152,11 +153,9 @@ public class RecurringPaymentController {
         );
 
         var result = useCase.submitCollection(command);
-        VrpPaymentResponse response = VrpPaymentResponse.from(
-                result,
-                request.data().instructedAmount().amount(),
-                request.data().instructedAmount().currency()
-        );
+        // The stored payment holds the amount at the currency scale; answer that, as the read-back does (LP-08-S04).
+        String storedAmount = Money.of(command.amount(), command.currency()).amount().toPlainString();
+        VrpPaymentResponse response = VrpPaymentResponse.from(result, storedAmount, command.currency());
 
         return ResponseEntity.created(URI.create("/open-finance/v1/vrp/payments/" + result.paymentId()))
                 .cacheControl(CacheControl.maxAge(0, TimeUnit.SECONDS).noStore())

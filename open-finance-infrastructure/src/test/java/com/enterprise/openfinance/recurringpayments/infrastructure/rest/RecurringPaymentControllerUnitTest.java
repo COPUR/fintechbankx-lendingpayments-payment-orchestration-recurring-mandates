@@ -73,6 +73,33 @@ class RecurringPaymentControllerUnitTest {
     }
 
     @Test
+    void shouldAnswerACollectionAmountAtTheStoredScale() {
+        RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
+        RecurringPaymentController controller = new RecurringPaymentController(useCase);
+        Mockito.when(useCase.submitCollection(Mockito.any())).thenReturn(new VrpCollectionResult(
+                "PAY-VRP-025",
+                "CONS-VRP-025",
+                VrpPaymentStatus.ACCEPTED,
+                "ix-25",
+                Instant.parse("2026-02-09T10:00:00Z"),
+                false
+        ));
+
+        ResponseEntity<VrpPaymentResponse> response = controller.submitPayment(
+                "DPoP token",
+                "proof",
+                "ix-25",
+                "TPP-001",
+                "IDEMP-025",
+                paymentRequest("CONS-VRP-025", "25", "AED")
+        );
+
+        // LP-08-S04: the payment is stored at the currency scale, so the collection answers "25.00" as the read-back does.
+        assertThat(response.getBody().data().instructedAmount().amount()).isEqualTo("25.00");
+        assertThat(response.getBody().data().instructedAmount().currency()).isEqualTo("AED");
+    }
+
+    @Test
     void shouldReturnConsentAndPaymentWithEtagAndNotModified() {
         RecurringPaymentUseCase useCase = Mockito.mock(RecurringPaymentUseCase.class);
         RecurringPaymentController controller = new RecurringPaymentController(useCase);
