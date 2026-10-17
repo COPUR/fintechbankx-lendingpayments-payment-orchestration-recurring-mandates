@@ -16,10 +16,16 @@
 #       name): a later definition would replace the vendored one. Subchart
 #       directories and .tgz archives (nested ones too) are read as well, an
 #       archive the way Helm loads it: every entry that is not a directory,
-#       whatever its typeflag, named by its pax or GNU long name, split on '\'
-#       when its name holds one and cleaned. An archive Helm would refuse, or a
-#       sparse entry, fails this check. Every file is read without a leading
-#       UTF-8 BOM, as Helm reads it.
+#       whatever its typeflag (a link entry is an empty file, as for Helm),
+#       named by its pax or GNU long name, split on '\' when its name holds one
+#       and cleaned. An archive Helm would refuse, or a sparse entry, fails this
+#       check. Every file is read without a leading UTF-8 BOM, as Helm reads
+#       it. A symbolic link anywhere inside the chart directory, to a file or
+#       a directory, in a subchart directory too, fails this check and is not
+#       followed: Helm's loader follows it and loads the files under every
+#       path that reaches them, so a link could file a template under a path
+#       the checks do not read as one. (The chart directory given may itself
+#       be reached through a link.)
 #   (c) every workload template calls fbx.guard before it writes anything:
 #       directly ({{- include "fbx.guard" ... -}}) or through an adapter define
 #       of the chart that calls fbx.guard unconditionally before any output of
@@ -46,23 +52,34 @@
 #       value holding a newline) is not followed, which is why every
 #       interpolated value is quoted (README step 3).
 #       Before the call only comments, variable assignments, fail and
-#       if/range/with blocks that write nothing may run, and these are refused
-#       there, also through an included define (an include whose name is
-#       chosen at render time counts with every template of the chart): tpl;
-#       merge, mergeOverwrite, mustMerge and mustMergeOverwrite, whatever their
-#       arguments (sprig merges nested maps in place); set and unset, unless
-#       the first argument is a bare variable and every assignment to it in the
-#       same template or define (:= or =, in any block, inside parentheses too;
-#       a range variable counts) is a dict call with no pipe after it
-#       ($vals := dict ...). The call may sit inside an {{ if }} (without else)
-#       that encloses the whole template, the form of an optional migration
-#       Job.
+#       if/range/with blocks that write nothing may run, and none of them may
+#       break the rule of (d), also through an included define (an include
+#       whose name is chosen at render time counts with every template of the
+#       chart). The call may sit inside an {{ if }} (without else) that
+#       encloses the whole template, the form of an optional migration Job.
+#   (d) no action of any template file of the chart (every file under
+#       templates/ of the chart and of its subcharts, directories and archives:
+#       workload and pod-free templates, partials, NOTES.txt, define and block
+#       bodies, before or after a guard call alike), the vendored guard file
+#       aside, calls tpl; merge, mergeOverwrite, mustMerge or
+#       mustMergeOverwrite, whatever their arguments (sprig merges nested maps
+#       in place); or set or unset, unless the first argument is a bare
+#       variable and every assignment to it in the same template, define or
+#       block (:= or =, in any block, inside parentheses too; a range variable
+#       counts) is a dict call with no pipe after it ($vals := dict ...). Helm
+#       renders every template of a chart against one shared values map (a
+#       subchart's values are a map inside its parent's; the templates of one
+#       chart also share the root map $ that holds it), the deepest path first
+#       and then by name in reverse, so a template that renders before a
+#       workload, or a define it includes, could otherwise change a value the
+#       workload's guard then reads.
 #       Scope: the checks catch a vendored copy that differs, an fbx.*
-#       redefinition, and a workload template that does not call the guard
-#       first, in conventional chart YAML and template code. Text held in
-#       values (tpl input, a value that writes YAML), what the adapter maps and
-#       what runs after the guard call (a template that changes .Values after
-#       the guard has run) are not read: they are review matters.
+#       redefinition, a workload template that does not call the guard first
+#       and a template that changes the shared values with the functions above,
+#       in conventional chart YAML and template code, and refuse a chart with a
+#       symbolic link. Text an action writes inside a value and the adapter's
+#       mapping (which chart value reaches which guard key) are not read: they
+#       are review matters.
 #
 # Prints the guard file(s) found with their sha256, one line per check, and
 # exits 0 when every check passes, 1 when one fails, 2 on a usage error.
@@ -161,17 +178,24 @@ function addFile(display, segments, chartKey, bytes) {
   for (const m of members) addFile(`${display}!${m.member}`, m.name.split("/"), `${display}!`, m.data);
 }
 
-function walk(abs, relSegments, seen) {
-  const real = fs.realpathSync(abs);
-  if (seen.has(real)) return;
-  seen.add(real);
+// Symbolic links inside the chart directory (files or directories, in
+// subchart directories too), each { path, target }. Helm's loader
+// follows them and loads the files under every path that reaches them; the
+// script reads none of them and fails check (b) instead, so no file can be
+// filed under a path the checks do not read the way Helm renders it.
+const symlinks = [];
+
+function walk(abs, relSegments) {
   for (const name of fs.readdirSync(abs).sort()) {
     const child = path.join(abs, name);
     const segments = [...relSegments, name];
-    let st;
     try {
-      st = fs.statSync(child);
-      if (st.isDirectory()) walk(child, segments, seen);
+      const st = fs.lstatSync(child);
+      if (st.isSymbolicLink()) {
+        let target;
+        try { target = fs.readlinkSync(child); } catch (err) { target = `unreadable: ${err.code ?? err.message}`; }
+        symlinks.push({ path: segments.join("/"), target });
+      } else if (st.isDirectory()) walk(child, segments);
       else if (st.isFile()) addFile(segments.join("/"), segments, "", fs.readFileSync(child));
     } catch (err) {
       unreadable.push(`${segments.join("/")}: ${err.code ?? err.message}`);
@@ -595,7 +619,7 @@ function definesIn(file) {
 
 // ---------------------------------------------------------------- scan
 try {
-  walk(chartDir, [], new Set());
+  walk(chartDir, []);
 } catch (err) {
   console.error(`verify-vendored-guard: cannot read ${chartArg}: ${err.message}`);
   process.exit(2);
@@ -648,7 +672,11 @@ for (const f of files) {
   }
 }
 for (const u of unreadable) { bFailures++; fail(`(b) cannot read ${u}, so it may define fbx.* templates`); }
-if (bFailures === 0) ok(`(b) no other file defines an fbx.* template (${files.length} files read, subchart directories and archives included)`);
+for (const s of symlinks) {
+  bFailures++;
+  fail(`(b) ${s.path} is a symbolic link (to ${s.target}): the script reads no symbolic links in a chart (Helm follows them and loads the files under every path that reaches them, so a link can hide a template from these checks); replace it with the file or directory it points to`);
+}
+if (bFailures === 0) ok(`(b) no other file defines an fbx.* template (${files.length} files read, subchart directories and archives included, no symbolic links)`);
 
 // (c)
 const quote = (body) => {
@@ -678,8 +706,9 @@ function callsIn(tokens) {
   return calls;
 }
 
-// What runs before the guard must not change what it reads, so the script
-// refuses there, without modelling what a value holds:
+// No template may change the values the guard reads (check (d) everywhere,
+// check (c) also before the guard call, through includes), so the script
+// refuses, without modelling what a value holds:
 //   - tpl (it runs template text taken from a value);
 //   - merge, mergeOverwrite, mustMerge and mustMergeOverwrite, whatever their
 //     arguments: sprig merges nested maps in place, so even a dict the
@@ -689,8 +718,9 @@ function callsIn(tokens) {
 //     every assignment to that name in the same template or define (:= and =,
 //     in any block, also inside parentheses; a range variable counts as an
 //     assignment) is a dict call with no pipe after it ($vals := dict ...).
-// An include counts with what the included define runs, and an include whose
-// name is chosen at render time with what any template of the chart runs.
+// directMutation applies this to one action. For check (c) an include counts
+// with what the included define runs, and an include whose name is chosen at
+// render time with what any template of the chart runs.
 // actionMutation returns why an action can change what the guard reads
 // ("calls mergeOverwrite, ...", "includes x, which calls set on $v, ...") or
 // null; assignments is assignmentsIn() of the action's template or define.
@@ -753,11 +783,13 @@ function assignmentsIn(tokens) {
   return found;
 }
 
-function actionMutation(t, assignments, stack) {
+// The rule itself, on one action: tpl, a merger, or a set/unset that is not
+// on a bare variable every assignment of which (assignments) is a dict call.
+function directMutation(t, assignments) {
   const flat = stripStrings(t.body);
   if (/(?<![\w.$])tpl(?![\w])/.test(flat)) return "calls tpl";
   const merger = MERGERS.exec(flat);
-  if (merger) return `calls ${merger[1]}, which merges nested maps in place (refused before the guard call)`;
+  if (merger) return `calls ${merger[1]}, which merges nested maps in place`;
   for (const m of flat.matchAll(SETTERS)) {
     const arg = /^\s+(\$[A-Za-z_][A-Za-z0-9_]*)(?=[\s)]|$)/.exec(flat.slice(m.index + m[0].length));
     if (!arg) return `calls ${m[1]} on something other than a variable bound to a dict call`;
@@ -766,6 +798,13 @@ function actionMutation(t, assignments, stack) {
     const bad = list.find((a) => !a.ok);
     if (bad) return `calls ${m[1]} on ${arg[1]}, which is assigned something other than a dict call (${bad.text.length > 50 ? `${bad.text.slice(0, 47)}...` : bad.text})`;
   }
+  return null;
+}
+
+function actionMutation(t, assignments, stack) {
+  const direct = directMutation(t, assignments);
+  if (direct) return direct;
+  const flat = stripStrings(t.body);
   for (const m of t.body.matchAll(/(?<![\w.$])(?:include|template)\s+("(?:[^"\\]|\\.)*"|`[^`]*`)/g)) {
     const r = readString(m[1]);
     const why = r ? defineMutation(r.value, stack) : chartMutation();
@@ -1137,6 +1176,53 @@ for (const f of templateFiles) {
   else ok(`(c) ${label}: runs fbx.guard before any output (${r.via})`);
 }
 if (workloads === 0) fail("(c) no workload template found under templates/ (no document whose top-level kind is outside the pod-free list)");
+
+// (d) Helm renders every template of a chart and of its subcharts against one
+// shared values map (a subchart's .Values is a map inside its parent's), in a
+// fixed order (pkg/engine sortTemplates: the deepest path first, then by name
+// in reverse), and every define of every template file can be included. So
+// the rule of (c) applies to every action of every template file, partials,
+// NOTES.txt, define and block bodies and code after a guard call included,
+// wherever it sits; only the vendored guard file is not read. Each template
+// and each define or block body is a scope of its own for the set/unset rule
+// (Go template variables do not cross it); a block's own action runs in the
+// scope around it.
+function scopeTokens(tokens) {
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.type === "open" && (t.word === "define" || t.word === "block")) {
+      if (t.word === "block") out.push(t);
+      const e = matchingEnd(tokens, i);
+      i = e < 0 ? tokens.length : e;
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
+let dFailures = 0;
+let dFiles = 0;
+for (const f of templateFiles) {
+  if (f === vendored) continue;
+  dFiles++;
+  const tokens = tokenize(f);
+  if (!tokens) { dFailures++; fail(`(d) ${f.display}: cannot parse the template, so it may change the values the templates share: ${f.lexError}`); continue; }
+  const scopes = [{ tokens: scopeTokens(tokens), where: "" }];
+  for (const d of definesIn(f)) scopes.push({ tokens: scopeTokens(d.body), where: `, ${d.word} ${JSON.stringify(d.name)}` });
+  for (const s of scopes) {
+    const assignments = assignmentsIn(s.tokens);
+    for (const t of s.tokens) {
+      if (t.type === "text" || t.type === "comment") continue;
+      const why = directMutation(t, assignments);
+      if (!why) continue;
+      dFailures++;
+      fail(`(d) ${f.display}: ${quote(t.body)} (line ${t.line}${s.where}) can change values a guard reads (Helm renders every template of the chart against one shared values map, so a template that renders later, or a later part of this one, reads the change): it ${why}`);
+    }
+  }
+}
+if (dFailures === 0) ok(`(d) no template file calls tpl, merge, mergeOverwrite, mustMerge or mustMergeOverwrite, or set or unset other than on a variable bound only to dict calls (${dFiles} template files read, the vendored guard file aside)`);
 
 for (const l of lines) console.log(l);
 if (failures.length === 0) {

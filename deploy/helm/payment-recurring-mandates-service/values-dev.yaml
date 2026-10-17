@@ -13,3 +13,7 @@ resources:
     memory: 768Mi
 topologySpread:
   maxSkew: 2
+
+# The accounts ledger in the cluster (ADR-030, svc-acc-accounts-ledger).
+config:
+  ACCOUNTS_SERVICE_BASE_URL: http://accounts-ledger-service.corebanking.svc.cluster.local:8080

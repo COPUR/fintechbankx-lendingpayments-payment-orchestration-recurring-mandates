@@ -76,7 +76,7 @@ Round 6, guardrail 4a: no values override may move the service off the checked
 JDBC URL, activate another profile or switch the startup TLS assertion off.
 
 The guard is the platform's, vendored unchanged as templates/_fbx_helpers.tpl
-(cicd-templates 6b6c317, charts/fintechbankx-service/templates/_helpers.tpl,
+(cicd-templates 73e1881, charts/fintechbankx-service/templates/_helpers.tpl,
 sha256 pinned in the README and in deployability.yml, checked by
 scripts/ci/verify-vendored-guard.sh). fbx.guard reads only
 .Values, so mandates.guard passes it an adapter built from this chart's values

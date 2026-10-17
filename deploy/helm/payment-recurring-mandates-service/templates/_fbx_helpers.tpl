@@ -276,6 +276,26 @@ the env names the Secret materialises and whose values are never seen here):
     can expand kafka-msk into local. The chart renders the only
     SPRING_PROFILES_ACTIVE (fbx.kafkaProfile, from kafka.runtime), so no
     user-set profile name is allowed;
+  - (?i)^spring[._-]?main([._-]|$): every spring.main.* name by prefix
+    (lazy-initialization, sources, allow-bean-definition-overriding,
+    allow-circular-references, web-application-type, banner-mode,
+    cloud-platform, keep-alive, ..., and the indexed forms
+    spring.main.sources[0] / SPRING_MAIN_SOURCES_0_). Spring Boot 3.3.6 binds
+    them onto the SpringApplication after the environment is prepared, over
+    what the service's code set: lazy-initialization moves a check made when
+    a bean is created (a TLS assertion on the connection pool) from startup
+    to first use, sources loads further bean definitions (a class, a package
+    or an XML file) and allow-bean-definition-overriding lets them replace
+    the service's datasource or Kafka beans. The chart sets none;
+  - schema management, by prefix: (?i)^spring[._-]?jpa([._-]|$),
+    ^spring[._-]?sql[._-]?init([._-]|$), ^hibernate([._-]|$) and
+    ^(jakarta|javax)[._-]?persistence([._-]|$) (spring.jpa.hibernate.ddl-auto,
+    spring.jpa.generate-ddl, spring.jpa.properties.hibernate.hbm2ddl.auto,
+    spring.sql.init.mode / schema-locations, hibernate.hbm2ddl.auto,
+    jakarta.persistence.schema-generation.*). They make the service create,
+    change or drop its schema at startup with its runtime role; the schema
+    belongs to the service's migrations. spring.data.jpa.* (repository
+    bootstrap) is not refused. The chart sets none;
   - (?i)^spring[._-]?ssl([._-]|$) and any name containing ssl[._-]?bundle:
     spring.ssl.bundle.pem.* / jks.* (SPRING_SSL_BUNDLE_*) can replace the
     trust anchor of a DocumentDB, PostgreSQL or Kafka client, and
@@ -295,9 +315,21 @@ the env names the Secret materialises and whose values are never seen here):
     The one name under these prefixes that stays allowed is
     ssl.endpoint.identification.algorithm (its canonical form ends in
     ssl.endpoint.identification.algorithm), whose value fbx.validateKafkaTls
-    checks; security.protocol is not under ssl and keeps its value check.
-    Other spring.kafka[.<client>].properties.* names (sasl.* for MSK IAM)
-    are not refused.
+    checks; security.protocol is not under ssl and keeps its value check;
+  - Kafka SASL and JAAS,
+    (?i)^spring[._-]?kafka[._-]((<client>[._-])?(properties[._-])?sasl|jaas),
+    with no boundary after sasl or jaas (so the concatenated
+    SPRING_KAFKA_PROPERTIES_SASLJAASCONFIG is refused too, fail closed):
+    spring.kafka[.<client>].properties.sasl.* (sasl.jaas.config,
+    sasl.mechanism, sasl.client.callback.handler.class,
+    sasl.login.callback.handler.class, ...), which reach the consumer,
+    producer, admin and streams client config, and spring.kafka.jaas.*
+    (enabled, login-module, control-flag, options.*), with which
+    KafkaAutoConfiguration installs a JVM-wide KafkaClient JAAS login
+    module; whatever kafka.runtime is. The services take them from the
+    kafka-msk profile in the image (Amazon MSK IAM), and no sasl.* name
+    stays allowed. Other spring.kafka[.<client>].properties.* names
+    (outside ssl.* and sasl.*) are not refused.
 Each rule is checked against the name as given and against both of its
 relaxed-binding readings: the environment reading (fbx.canonicalName: '_'
 separates elements, Spring Boot skips every character other than [a-z0-9]
@@ -306,21 +338,29 @@ spring.pro:files and spring[profiles] bind like the plain name) and the
 property reading (fbx.propertyName: only '.' and '[...]' separate elements and
 '_' is skipped too, so spring.pro_files, spring.kafka.s_sl and
 spring.data.mongo_db bind as spring.profiles, spring.kafka.ssl and
-spring.data.mongodb). The helper prints the reason (non-empty means rejected).
+spring.data.mongodb), and against both readings of the name with its brackets
+removed (fbx.bracketlessName: spring.J]PA binds as spring.jpa). The helper
+prints the reason (non-empty means rejected).
 JVM options (JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS, _JAVA_OPTIONS and the chart's
 javaToolOptions) can set -Dspring.datasource.url=..., -Djavax.net.ssl.*,
 -Dspring.config.*, -Dspring.profiles.*, -Dspring.ssl.bundle.*,
 -Dfintechbankx.tls.*, -Dspring.kafka.*, -Dspring.data.mongodb.*,
--DKAFKA_TLS_CA or -DMONGODB_URI (a system property resolves the services'
-${KAFKA_TLS_CA} and ${MONGODB_URI} before the environment does),
--Djava.security.properties (a security properties file can replace the trust
-manager algorithm or keystore type), -Djdk.tls.* or
+-Dspring.main.*, -Dspring.jpa.*, -Dspring.sql.init.*, -Dhibernate.* or
+-Djakarta/javax.persistence.* (Hibernate also reads system properties),
+-DKAFKA_TLS_CA or -DMONGODB_URI (a system property resolves
+the services' ${KAFKA_TLS_CA} and ${MONGODB_URI} before the environment
+does), -Djava.security.auth.login.config (a JVM-wide JAAS file whose
+KafkaClient entry the Kafka client uses when a client has no
+sasl.jaas.config), -Djava.security.properties (a security properties file
+can replace the trust manager algorithm or keystore type), -Djdk.tls.* or
 -Djdk.internal.httpclient.disableHostnameVerification, or read more options
 from a file: a value that mentions datasource, flyway, liquibase, r2dbc, jdbc,
 ssl, application[._-]json, spring[._-]config, spring[._-]profiles,
 fintechbankx[._-]tls, security[._-]protocol, endpoint[._-]identification,
-kafka, mongo[._-]db, java[._-]security[._-]properties, jdk[._-]tls or
-hostname[._-]verification
+kafka, mongo[._-]db, spring[._-]main, sasl, jaas,
+java[._-]security[._-]auth, java[._-]security[._-]properties, jdk[._-]tls,
+hostname[._-]verification, spring[._-]jpa, spring[._-]sql[._-]init,
+hibernate or (jakarta|javax)[._-]persistence
 (also once every character other than [a-z0-9] is removed, keeping and then
 dropping white space: -Dspring..config.import, -Dspring.[profiles].active,
 -Dspring.pro_files.active, a quoted "-Dspring.pro files.active" and JSON
@@ -377,6 +417,20 @@ collapsed, leading and trailing dots trimmed.
 {{- trimAll "." $c -}}
 {{- end -}}
 
+{{/*
+The name with every '[' and ']' removed, read through fbx.canonicalName and
+fbx.propertyName as two more forms: Spring Boot 3.3.6 skips a ']' that closes
+no '[' inside an element, and an element that is not plain [a-z0-9-] keeps
+only [a-z0-9], so the env names spring.J]PA.generate-ddl,
+-s]pring.sql.init.mode and S]PRING.profiles.active (Kubernetes 1.32+ accepts
+them; ConfigMap and Secret keys cannot hold a bracket) bind
+spring.jpa.generate-ddl, spring.sql.init.mode and spring.profiles.active,
+while both readings above turn the bracket into '.' (spring.j.pa).
+*/}}
+{{- define "fbx.bracketlessName" -}}
+{{- regexReplaceAll "[\\[\\]]+" (toString .) "" -}}
+{{- end -}}
+
 {{- define "fbx.datasourceOverrideName" -}}
 {{- $n := toString . -}}
 {{- if not (regexMatch "(?i)^SPRING_(DATASOURCE|DATA_MONGODB)_(USERNAME|PASSWORD)$" $n) -}}
@@ -386,6 +440,13 @@ collapsed, leading and trailing dots trimmed.
 {{- end -}}
 {{- if not $reason -}}
 {{- $reason = include "fbx.overrideNameReason" (include "fbx.propertyName" $n) -}}
+{{- end -}}
+{{- $nb := include "fbx.bracketlessName" $n -}}
+{{- if not $reason -}}
+{{- $reason = include "fbx.overrideNameReason" (include "fbx.canonicalName" $nb) -}}
+{{- end -}}
+{{- if not $reason -}}
+{{- $reason = include "fbx.overrideNameReason" (include "fbx.propertyName" $nb) -}}
 {{- end -}}
 {{- $reason -}}
 {{- end -}}
@@ -401,12 +462,18 @@ a TLS parameter name can replace the mounted CA or the verify-full mode, and DB_
 a spring.config.* property (import, location, additional-location, name, activate.*, indexed forms) can load or activate a file or config tree that overrides the datasource past the sslmode=verify-full check; the chart renders no config import
 {{- else if regexMatch "(?i)^spring[._-]?profiles([._-]|$)" $n -}}
 a profile can activate an application-<profile> config in the image (e.g. local) whose datasource and TLS settings the chart cannot check; the chart renders the only profile, from kafka.runtime
+{{- else if regexMatch "(?i)^spring[._-]?main([._-]|$)" $n -}}
+a spring.main.* property (lazy-initialization, sources, allow-bean-definition-overriding, web-application-type, cloud-platform, ..., indexed forms) is bound onto the SpringApplication and overrides the service's own settings: lazy-initialization moves a check made when a bean is created (such as a TLS assertion on the connection pool) from startup to first use, sources loads further bean definitions (a class, a package or an XML file) and allow-bean-definition-overriding lets them replace the service's datasource or Kafka beans; the chart sets none
+{{- else if regexMatch "(?i)^spring[._-]?jpa([._-]|$)|^spring[._-]?sql[._-]?init([._-]|$)|^hibernate([._-]|$)|^(jakarta|javax)[._-]?persistence([._-]|$)" $n -}}
+a schema-management setting (spring.jpa.*, spring.sql.init.*, hibernate.*, jakarta.persistence.*, javax.persistence.*: ddl-auto, generate-ddl, hbm2ddl.auto, schema-generation.*, SQL init scripts) can make the service create, change or drop its schema at startup with its runtime role; the schema belongs to the service's migrations, and the chart sets none
 {{- else if regexMatch "(?i)^spring[._-]?ssl([._-]|$)|ssl[._-]?bundle" $n -}}
 an SSL bundle property can replace the trust anchor of the service's DocumentDB, PostgreSQL or Kafka client, or point the client at another bundle
 {{- else if regexMatch "(?i)^fintechbankx[._-]?tls([._-]|$)" $n -}}
 it can switch off the service's startup TLS assertion (fintechbankx.tls.enforce is for the local profile and tests only)
 {{- else if and (regexMatch "(?i)^spring[._-]?kafka[._-](?:[a-z0-9]+[._-])?(?:properties[._-])?ssl(?:[._-]|$)" $n) (not (regexMatch "^spring\\.?kafka\\.(?:[a-z0-9]+\\.)?(?:properties\\.)?ssl\\.endpoint\\.?identification\\.?algorithm$" (include "fbx.canonicalName" $n))) -}}
 a Kafka client TLS setting (spring.kafka[.<client>].ssl.*, spring.kafka[.<client>].properties.ssl.*) can replace the client's trust store, key store or certificates or change its TLS protocol; they come from the kafka-msk / kafka-strimzi profile in the image (the Strimzi client certificate, key and CA through KAFKA_TLS_CERT, KAFKA_TLS_KEY and KAFKA_TLS_CA from a Secret), and only ssl.endpoint.identification.algorithm may be set (https)
+{{- else if regexMatch "(?i)^spring[._-]?kafka[._-](?:(?:[a-z0-9]+[._-])?(?:properties[._-])?sasl|jaas)" $n -}}
+a Kafka SASL or JAAS setting (spring.kafka[.<client>].properties.sasl.*: sasl.jaas.config, sasl.mechanism, sasl.client.callback.handler.class, sasl.login.callback.handler.class, ...; spring.kafka.jaas.*, a JVM-wide JAAS login module) can replace the client's login module, mechanism or callback handlers; they come from the kafka-msk profile in the image (Amazon MSK IAM)
 {{- else if regexMatch "(?i)^spring[._-]?data[._-]?mongodb([._-]|$)" $n -}}
 a spring.data.mongodb.* property can point the DocumentDB client at another server or switch its TLS off; the connection string comes only from MONGODB_URI in a Secret, and only SPRING_DATA_MONGODB_USERNAME and SPRING_DATA_MONGODB_PASSWORD may be set
 {{- end -}}
@@ -447,9 +514,9 @@ IAM over SASL_SSL; strimzi -> kafka-strimzi, Strimzi mutual TLS over SSL).
 {{- end -}}
 {{- $alt := regexReplaceAll "[^a-z0-9\\s]+" (lower $v) "" -}}
 {{- $flat := regexReplaceAll "[^a-z0-9]+" (lower $v) "" -}}
-{{- $rule := "(?i)datasource|flyway|liquibase|r2dbc|jdbc|ssl|application[._-]?json|spring[._-]?config|spring[._-]?profiles|fintechbankx[._-]?tls|security[._-]?protocol|endpoint[._-]?identification|kafka|mongo[._-]?db|java[._-]?security[._-]?properties|jdk[._-]?tls|hostname[._-]?verification|(^|[\\s\"'])@|-XX:(VMOptionsFile|Flags)" -}}
+{{- $rule := "(?i)datasource|flyway|liquibase|r2dbc|jdbc|ssl|application[._-]?json|spring[._-]?config|spring[._-]?profiles|fintechbankx[._-]?tls|security[._-]?protocol|endpoint[._-]?identification|kafka|mongo[._-]?db|spring[._-]?main|sasl|jaas|java[._-]?security[._-]?auth|java[._-]?security[._-]?properties|jdk[._-]?tls|hostname[._-]?verification|spring[._-]?jpa|spring[._-]?sql[._-]?init|hibernate|(jakarta|javax)[._-]?persistence|(^|[\\s\"'])@|-XX:(VMOptionsFile|Flags)" -}}
 {{- if or (regexMatch $rule $v) (regexMatch $rule $alt) (regexMatch $rule $flat) -}}
-{{- fail (printf "%s must not mention datasource, flyway, liquibase, r2dbc, jdbc, ssl, application.json, spring.config, spring.profiles, fintechbankx.tls, security.protocol, endpoint.identification, kafka, mongodb, java.security.properties, jdk.tls or hostname verification, nor read options from a file ('@' argument file, also quoted, -XX:VMOptionsFile, -XX:Flags) (JVM system properties would override the datasource past the sslmode=verify-full check, the trust store, the Kafka or DocumentDB client settings or the service's TLS assertion)" .where) -}}
+{{- fail (printf "%s must not mention datasource, flyway, liquibase, r2dbc, jdbc, ssl, application.json, spring.config, spring.profiles, fintechbankx.tls, security.protocol, endpoint.identification, kafka, mongodb, spring.main, sasl, jaas, java.security.auth, java.security.properties, jdk.tls, hostname verification, spring.jpa, spring.sql.init, hibernate, jakarta.persistence or javax.persistence, nor read options from a file ('@' argument file, also quoted, -XX:VMOptionsFile, -XX:Flags) (JVM system properties would override the datasource past the sslmode=verify-full check, the trust store, the Kafka or DocumentDB client settings or login module, the SpringApplication settings or the service's TLS assertion, or manage the schema at startup)" .where) -}}
 {{- end -}}
 {{- end -}}
 
@@ -533,8 +600,10 @@ spring.kafka.security.pro_tocol, spring.kafka.properties[security.protocol]).
 {{- $n := toString . -}}
 {{- $c := include "fbx.canonicalName" $n -}}
 {{- $p := include "fbx.propertyName" $n -}}
-{{- if or (regexMatch "(?i)(^|[._-])security[._-]?protocol$" $n) (regexMatch "(^|\\.)security\\.?protocol$" $c) (regexMatch "(^|\\.)security\\.?protocol$" $p) -}}protocol
-{{- else if or (regexMatch "(?i)endpoint[._-]?identification[._-]?algorithm" $n) (regexMatch "endpoint\\.?identification\\.?algorithm" $c) (regexMatch "endpoint\\.?identification\\.?algorithm" $p) -}}endpoint
+{{- $cb := include "fbx.canonicalName" (include "fbx.bracketlessName" $n) -}}
+{{- $pb := include "fbx.propertyName" (include "fbx.bracketlessName" $n) -}}
+{{- if or (regexMatch "(?i)(^|[._-])security[._-]?protocol$" $n) (regexMatch "(^|\\.)security\\.?protocol$" $c) (regexMatch "(^|\\.)security\\.?protocol$" $p) (regexMatch "(^|\\.)security\\.?protocol$" $cb) (regexMatch "(^|\\.)security\\.?protocol$" $pb) -}}protocol
+{{- else if or (regexMatch "(?i)endpoint[._-]?identification[._-]?algorithm" $n) (regexMatch "endpoint\\.?identification\\.?algorithm" $c) (regexMatch "endpoint\\.?identification\\.?algorithm" $p) (regexMatch "endpoint\\.?identification\\.?algorithm" $cb) (regexMatch "endpoint\\.?identification\\.?algorithm" $pb) -}}endpoint
 {{- end -}}
 {{- end -}}
 
