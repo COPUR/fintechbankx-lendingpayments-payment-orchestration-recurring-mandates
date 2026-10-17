@@ -64,8 +64,7 @@ class DatabaseMigrationIT {
                 "migrate",
                 "--spring.datasource.url=" + PostgresTestDatabase.url(),
                 "--DB_USERNAME=" + PostgresTestDatabase.RUNTIME_ROLE,
-                "--DB_MIGRATION_USERNAME=" + PostgresTestDatabase.ownerUser(),
-                "--DB_MIGRATION_PASSWORD=wrong-password",
+                "--DB_MIGRATION_USERNAME=migration_role_that_does_not_exist",
                 "--spring.flyway.schemas=" + SCHEMA,
                 "--spring.flyway.default-schema=" + SCHEMA);
 

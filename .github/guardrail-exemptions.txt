@@ -1,5 +1,4 @@
 # Exemptions for the publication guardrails secret scan. One line per exemption:
 # file<TAB>exact line text<TAB>reason. A hit is dropped only when its file and whole line are listed.
 open-finance-bootstrap/src/test/java/com/enterprise/openfinance/recurringpayments/PostgresTestDatabase.java	    static final String RUNTIME_PASSWORD = "mandates_runtime_it";	test-only role password; the role is created with 'if not exists', so reruns against a persistent TEST_DB_URL need a stable value
-open-finance-bootstrap/src/test/java/com/enterprise/openfinance/recurringpayments/DatabaseMigrationIT.java	                "--DB_MIGRATION_PASSWORD=wrong-password",	deliberately wrong migration password that the migration must refuse; not a credential
 open-finance-bootstrap/src/test/java/com/enterprise/openfinance/recurringpayments/DatabaseMigrationIT.java	                "--DB_MIGRATION_PASSWORD=" + PostgresTestDatabase.ownerPassword(),	concatenated runtime value: the migration password is PostgresTestDatabase.ownerPassword(); the reference scan reads the opening quote of a concatenation as a literal
