@@ -5,6 +5,9 @@ on:
   push:
     branches: ["main", "dev", "staging"]
 
+permissions:
+  contents: read
+
 jobs:
   local-path-leak-check:
     runs-on: ubuntu-latest
@@ -14,21 +17,104 @@ jobs:
       - name: Detect local path or identity leakage
         run: |
           set -euo pipefail
-          if rg -n "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**'; then
-            echo "Local path / identity leakage detected"
-            exit 1
-          fi
+          # ripgrep is pinned and checked before use, so a missing or failing rg is an error, never a clean scan.
+          RG_DIR=$(mktemp -d)
+          case "$(uname -m)" in
+            x86_64)
+              rg_asset=ripgrep-14.1.0-x86_64-unknown-linux-musl; rg_sha=f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7 ;;
+            aarch64|arm64)
+              rg_asset=ripgrep-14.1.0-aarch64-unknown-linux-gnu; rg_sha=c8c210b99844fbf16b7a36d1c963e8351bca5ff2dd7c788f5fba4ac18ba8c60d ;;
+            *) echo "unsupported runner architecture $(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o "$RG_DIR/rg.tar.gz" "https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/${rg_asset}.tar.gz"
+          echo "${rg_sha}  $RG_DIR/rg.tar.gz" | sha256sum -c -
+          tar -xz -C "$RG_DIR" -f "$RG_DIR/rg.tar.gz"
+          export PATH="$RG_DIR/${rg_asset}:$PATH"
+          command -v rg >/dev/null || { echo "ripgrep (rg) is required on this runner"; exit 1; }
+          status=0
+          rg -n --hidden "/Users/|\\\\Users\\\\|/home/|alicopur" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' --glob '!.github/workflows/publication-guardrails.yml' || status=$?
+          case $status in
+            0) echo "Local path / identity leakage detected"; exit 1 ;;
+            1) ;;
+            *) echo "rg failed with exit $status"; exit "$status" ;;
+          esac
 
   secret-pattern-scan:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Check the scan against its fixtures
+        run: bash scripts/ci/check-guardrail-fixtures.sh .github/workflows/publication-guardrails.yml
       - name: Scan secret-like patterns
         run: |
           set -euo pipefail
-          PATTERN='BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key|password\\s*[:=]'
-          if rg -n "$PATTERN" . --glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**'; then
+          # ripgrep is pinned and checked before use, so a missing or failing rg is an error, never a clean scan.
+          RG_DIR=$(mktemp -d)
+          case "$(uname -m)" in
+            x86_64)
+              rg_asset=ripgrep-14.1.0-x86_64-unknown-linux-musl; rg_sha=f84757b07f425fe5cf11d87df6644691c644a5cd2348a2c670894272999d3ba7 ;;
+            aarch64|arm64)
+              rg_asset=ripgrep-14.1.0-aarch64-unknown-linux-gnu; rg_sha=c8c210b99844fbf16b7a36d1c963e8351bca5ff2dd7c788f5fba4ac18ba8c60d ;;
+            *) echo "unsupported runner architecture $(uname -m)"; exit 1 ;;
+          esac
+          curl -sSfL -o "$RG_DIR/rg.tar.gz" "https://github.com/BurntSushi/ripgrep/releases/download/14.1.0/${rg_asset}.tar.gz"
+          echo "${rg_sha}  $RG_DIR/rg.tar.gz" | sha256sum -c -
+          tar -xz -C "$RG_DIR" -f "$RG_DIR/rg.tar.gz"
+          export PATH="$RG_DIR/${rg_asset}:$PATH"
+          command -v rg >/dev/null || { echo "ripgrep (rg) is required on this runner"; exit 1; }
+          EXCLUDES=(--glob '!**/.git/**' --glob '!**/build/**' --glob '!**/.gradle/**' --glob '!**/node_modules/**' --glob '!.github/guardrail-exemptions.txt')
+          found=0
+
+          # An exemption is a line of .github/guardrail-exemptions.txt: file, TAB, the exact line text, TAB, a reason.
+          # A hit is dropped only when its file and its whole line are listed, so the same shape on another line still fails.
+          unexempt() {
+            local hit file rest n text
+            while IFS= read -r hit; do
+              file=${hit#./}; file=${file%%:*}
+              rest=${hit#*:}; n=${rest%%:*}
+              text=$(sed -n "${n}p" "$file")
+              if [ -f .github/guardrail-exemptions.txt ] && F="$file" T="$text" awk -F'\t' '$1 == ENVIRON["F"] && $2 == ENVIRON["T"] { found = 1 } END { exit !found }' .github/guardrail-exemptions.txt; then
+                continue
+              fi
+              printf '%s\n' "$hit"
+            done
+          }
+
+          # Key material and token formats: no placeholder exemption.
+          status=0
+          hits=$(rg -n --hidden 'BEGIN (RSA|EC|OPENSSH|PRIVATE KEY)|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{20,}|secret[_-]?key' . "${EXCLUDES[@]}") || status=$?
+          case $status in
+            0) hits=$(printf '%s\n' "$hits" | unexempt); if [ -n "$hits" ]; then echo "$hits"; found=1; fi ;;
+            1) ;;
+            *) echo "rg failed with exit $status"; exit "$status" ;;
+          esac
+
+          # A password value is tested from its key to the end of its line, and the placeholder test is anchored to that match.
+          # The value must be a placeholder all the way to a closing quote or backtick, an end of statement or a trailing comment:
+          # an empty value, <name>, ${NAME}, ${NAME:}, ${NAME:-}, ${NAME:?message}, a nested ${...} default, var.name, env.NAME,
+          # env(NAME), System.getenv(NAME), x.getPassword(), resource.name.attr, a Helm action or a whole boolean (true or false).
+          # Anything else is reported: a literal default such as ${NAME:-value}, a literal after an operator, and a key whose
+          # name ends in password, quoted or not (DB_PASSWORD, dbPassword, PGPASSWORD, "password").
+          PLACEHOLDER='^\./[^:]*:[0-9]+:[A-Za-z0-9_.-]*password[\x22\x27\x60]?\s*[:=]\s*[\x22\x27\x60]?((<[A-Za-z0-9_. -]+>|\$\{[A-Za-z_][A-Za-z0-9_.-]*(:(\$\{[A-Za-z0-9_.:-]*\})?|:-)?\}|\$\{[A-Za-z_][A-Za-z0-9_.-]*:\?[^}]*\}|-\}|var\.[A-Za-z_][A-Za-z0-9_]*|(?-i:env\.[A-Z][A-Z0-9_]*)|env\([^,)]*\)|[A-Za-z_.]*[Gg]etenv\([^,)]*\)|[A-Za-z_][A-Za-z0-9_.]*\.[Gg]et[A-Za-z0-9_]*\(\)|(?-i:[a-z]+(_[a-z0-9]+)+\.[A-Za-z][A-Za-z0-9_-]*\.[a-z_]+)|true|false|\{\{[^}]*\}\})[\x22\x27\x60]?[ \t]*[},;)]*[ \t]*([ \t]+#.*)?|[\x22\x27\x60]?[ \t]*)$'
+          status=0
+          values=$(rg -i -o -n --hidden '[A-Za-z0-9_.-]*password[\x22\x27\x60]?\s*[:=].*' . "${EXCLUDES[@]}") || status=$?
+          case $status in
+            0) ;;
+            1) values= ;;
+            *) echo "rg failed with exit $status"; exit "$status" ;;
+          esac
+          if [ -n "$values" ]; then
+            status=0
+            kept=$(printf '%s\n' "$values" | rg -v -i -e "$PLACEHOLDER") || status=$?
+            case $status in
+              0) kept=$(printf '%s\n' "$kept" | unexempt); if [ -n "$kept" ]; then echo "$kept"; found=1; fi ;;
+              1) ;;
+              *) echo "rg failed with exit $status"; exit "$status" ;;
+            esac
+          fi
+
+          if [ "$found" -ne 0 ]; then
             echo "Potential secret pattern detected"
             exit 1
           fi

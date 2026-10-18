@@ -3,6 +3,7 @@ package com.enterprise.openfinance.recurringpayments.domain.model;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.time.ZoneId;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -15,6 +16,9 @@ class VrpSettingsTest {
 
         assertThat(settings.idempotencyTtl()).isEqualTo(Duration.ofHours(24));
         assertThat(settings.cacheTtl()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(settings.limitPeriodZone()).isEqualTo(ZoneId.of("Asia/Dubai"));
+        assertThat(new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30), ZoneId.of("UTC")).limitPeriodZone())
+                .isEqualTo(ZoneId.of("UTC"));
     }
 
     @Test
@@ -26,5 +30,9 @@ class VrpSettingsTest {
         assertThatThrownBy(() -> new VrpSettings(Duration.ofHours(24), Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("cacheTtl");
+
+        assertThatThrownBy(() -> new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("limitPeriodZone");
     }
 }

@@ -1,0 +1,140 @@
+{{- if .Values.migration.enabled }}
+{{- /* Guardrail 4a: the vendored platform guard (fbx.guard) on every value route, before anything renders. */ -}}
+{{- include "mandates.guard" . -}}
+{{- /*
+Flyway as a separate step (platform contract "Database roles"): runs before
+every install and upgrade, as the schema owner, with the db-migration secret.
+The service pods never mount that secret and run with SPRING_FLYWAY_ENABLED=false.
+Both resources are hooks and are deleted once the hooks succeed, so the owner
+credential (the ExternalSecret's target Secret, owned by it) leaves the
+namespace with them. A failed Job stays for inspection until the next attempt.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "mandates.migrationName" . }}
+  labels:
+    {{- include "mandates.externalSecretLabels" . | nindent 4 }}
+    app.kubernetes.io/component: db-migration
+  annotations:
+    # The Job's own account (platform round 7), created as a hook before the
+    # Job: on a first install the chart's ServiceAccount does not exist yet
+    # while pre-install hooks run. No API token is mounted (the Job sets
+    # automountServiceAccountToken false) and no IAM role is attached.
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+automountServiceAccountToken: false
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ include "mandates.migrationName" . }}
+  labels:
+    {{- include "mandates.externalSecretLabels" . | nindent 4 }}
+    app.kubernetes.io/component: db-migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  refreshInterval: {{ .Values.externalSecret.refreshInterval | quote }}
+  secretStoreRef:
+    kind: {{ .Values.externalSecret.secretStoreRef.kind | quote }}
+    name: {{ .Values.externalSecret.secretStoreRef.name | quote }}
+  target:
+    name: {{ include "mandates.migrationName" . }}
+    creationPolicy: Owner
+  data:
+    - secretKey: DB_MIGRATION_USERNAME
+      remoteRef:
+        key: {{ include "mandates.remoteKey" (list "migration.remoteSecretName" .Values.migration.remoteSecretName .) | quote }}
+        property: username
+    - secretKey: DB_MIGRATION_PASSWORD
+      remoteRef:
+        key: {{ include "mandates.remoteKey" (list "migration.remoteSecretName" .Values.migration.remoteSecretName .) | quote }}
+        property: password
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "mandates.migrationName" . }}
+  labels:
+    {{- include "mandates.instanceLabels" . | nindent 4 }}
+    app.kubernetes.io/component: db-migration
+    app.kubernetes.io/part-of: fintechbankx-payments
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit | int }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds | int }}
+  template:
+    metadata:
+      # app.kubernetes.io/name = the service account name, so the mesh
+      # NetworkPolicy allow-egress-aurora (selects by that label only) lets
+      # the pod reach Aurora on 5432. component db-migration keeps it out of
+      # the Service, PDB, NetworkPolicy and Deployment selectors (component service).
+      labels:
+        {{- include "mandates.instanceLabels" . | nindent 8 }}
+        app.kubernetes.io/component: db-migration
+        # No fintechbankx.io/service-id: observability scrapes and alerts
+        # (ServiceAllInstancesDown) on that label; a completed Job pod is not
+        # a service instance.
+        sidecar.istio.io/inject: {{ .Values.migration.istioSidecar | quote }}
+      annotations:
+        # A classic Istio sidecar never exits, so the Job would never
+        # complete; see values migration.istioSidecar.
+        sidecar.istio.io/inject: {{ .Values.migration.istioSidecar | quote }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "mandates.migrationName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: db-migration
+          image: {{ printf "%s:%s" (required "image.repository is required" .Values.image.repository) (required "image.tag is required" .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          args: ["migrate"]
+          env:
+            - name: DB_URL
+              value: {{ .Values.config.DB_URL | quote }}
+            # The runtime role V5 grants (Flyway placeholder runtime_role).
+            - name: DB_USERNAME
+              value: {{ .Values.config.DB_USERNAME | quote }}
+            - name: DB_SSL_ROOT_CERT
+              value: {{ printf "%s/%s" .Values.rdsCaBundle.mountPath .Values.rdsCaBundle.key | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ include "mandates.migrationName" . }}
+          resources:
+            {{- toYaml .Values.migration.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: rds-ca-bundle
+              mountPath: {{ .Values.rdsCaBundle.mountPath | quote }}
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: rds-ca-bundle
+          configMap:
+            name: {{ .Values.rdsCaBundle.configMapName | quote }}
+            items:
+              - key: {{ .Values.rdsCaBundle.key | quote }}
+                path: {{ .Values.rdsCaBundle.key | quote }}
+{{- end }}

@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Tag("unit")
 class RecurringPaymentExceptionHandlerTest {
 
-    private final RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler();
+    private final RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler(java.time.Clock.systemUTC());
 
     @Test
     void shouldMapForbiddenAndNotFoundAndConflict() {
@@ -47,5 +47,56 @@ class RecurringPaymentExceptionHandlerTest {
         assertThat(business.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(badRequest.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(unexpected.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    @Test
+    void shouldMapConcurrentUpdateDependencyFailureAndMalformedRequests() {
+        RecurringPaymentExceptionHandler handler = new RecurringPaymentExceptionHandler(java.time.Clock.systemUTC());
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.addHeader("X-FAPI-Interaction-ID", "ix-err");
+
+        var conflict = handler.handleConcurrentUpdate(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.MandateVersionConflictException("x"), request);
+        var unavailable = handler.handleDependencyFailure(
+                new org.springframework.web.client.ResourceAccessException("connect timed out"), request);
+        var malformed = handler.handleMalformedRequest(
+                new org.springframework.web.bind.MissingRequestHeaderException("DPoP", null), request);
+
+        assertThat(conflict.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(conflict.getBody().code()).isEqualTo("CONCURRENT_UPDATE");
+        assertThat(unavailable.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(unavailable.getBody().message()).doesNotContain("timed out");
+        assertThat(malformed.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(malformed.getBody().interactionId()).isEqualTo("ix-err");
+    }
+
+    @Test
+    void springClientErrorsKeepTheirStatusInsteadOfBecoming500() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+
+        assertThat(handler.handleUnexpected(new org.springframework.web.HttpRequestMethodNotSupportedException("PUT"),
+                request).getStatusCode().value()).isEqualTo(405);
+        assertThat(handler.handleUnexpected(new org.springframework.web.HttpMediaTypeNotSupportedException("text/plain"),
+                request).getStatusCode().value()).isEqualTo(415);
+        var notFound = handler.handleUnexpected(new org.springframework.web.servlet.resource.NoResourceFoundException(
+                org.springframework.http.HttpMethod.GET, "open-finance/v1/vrp/unknown"), request);
+        assertThat(notFound.getStatusCode().value()).isEqualTo(404);
+        assertThat(notFound.getBody().code()).isEqualTo("NOT_FOUND");
+    }
+
+    @Test
+    void aSecondMandateForAConsentIs409AndAConsentServiceOutageIs503() {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+
+        var exists = handler.handleMandateExists(
+                new com.enterprise.openfinance.recurringpayments.domain.exception.MandateAlreadyExistsException("dup"), request);
+        var down = handler.handleConsentServiceDown(
+                new com.enterprise.openfinance.recurringpayments.infrastructure.external.ConsentServiceUnavailableException("x", null),
+                request);
+
+        assertThat(exists.getStatusCode().value()).isEqualTo(409);
+        assertThat(exists.getBody().code()).isEqualTo("MANDATE_EXISTS");
+        assertThat(down.getStatusCode().value()).isEqualTo(503);
+        assertThat(down.getBody().code()).isEqualTo("DEPENDENCY_UNAVAILABLE");
     }
 }

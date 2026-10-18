@@ -29,10 +29,29 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
 
+    // Persistence: own schema sc_pay_recurring_mandates, Flyway migrations in src/main/resources/db/migration
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.postgresql:postgresql'
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
+    // Inbound OAuth2 resource server (TPP tokens, DPoP) and outbound client-credentials service token
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
+
+    // Transactional outbox relay and metrics
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'io.micrometer:micrometer-core'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.assertj:assertj-core'
     testImplementation 'org.mockito:mockito-core'
+    testImplementation 'com.tngtech.archunit:archunit-junit5:1.4.1'
+    // Proves the outbox meters coexist under their Prometheus names (OutboxMetricsPrometheusTest).
+    testImplementation 'io.micrometer:micrometer-registry-prometheus'
 }
 
 jacoco {

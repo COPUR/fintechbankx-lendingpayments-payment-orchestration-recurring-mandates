@@ -1,0 +1,9 @@
+apiVersion: v2
+name: payment-recurring-mandates-service
+description: svc-pay-recurring-mandates, variable recurring payment mandates (VRP consents) and their collections.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+annotations:
+  fintechbankx.io/service-id: svc-pay-recurring-mandates
+  fintechbankx.io/owning-squad: Recurring and Bulk Payments Squad

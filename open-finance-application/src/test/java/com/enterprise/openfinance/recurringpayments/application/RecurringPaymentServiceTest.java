@@ -1,10 +1,12 @@
 package com.enterprise.openfinance.recurringpayments.application;
 
 import com.enterprise.openfinance.recurringpayments.domain.command.CreateVrpConsentCommand;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.command.RevokeVrpConsentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.command.SubmitVrpPaymentCommand;
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.MandateAlreadyExistsException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpCollectionResult;
@@ -14,6 +16,16 @@ import com.enterprise.openfinance.recurringpayments.domain.model.VrpIdempotencyR
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpPayment;
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpPaymentStatus;
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpSettings;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateCreated;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateEvent;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandatePaymentAccepted;
+import com.enterprise.openfinance.recurringpayments.domain.event.MandateRevoked;
+import com.enterprise.openfinance.recurringpayments.domain.model.DebtorAccount;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.DebtorAccountPort;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateTransactions;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.PsuConsentPort;
+import com.enterprise.openfinance.recurringpayments.domain.model.PsuConsent;
+import com.enterprise.openfinance.recurringpayments.domain.port.out.MandateEventPublisher;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpCachePort;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpConsentPort;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpIdempotencyPort;
@@ -50,6 +62,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class RecurringPaymentServiceTest {
 
     private static final Clock CLOCK = Clock.fixed(Instant.parse("2026-02-09T10:00:00Z"), ZoneOffset.UTC);
+    private static final CountingTransactions TRANSACTIONS = new CountingTransactions();
+
+    /** Counts open transactions per thread, like a thread-bound Spring transaction. */
+    private static final class CountingTransactions implements MandateTransactions {
+        private final ThreadLocal<Integer> open = ThreadLocal.withInitial(() -> 0);
+
+        @Override
+        public <T> T inTransaction(java.util.function.Supplier<T> work) {
+            open.set(open.get() + 1);
+            try {
+                return work.get();
+            } finally {
+                open.set(open.get() - 1);
+            }
+        }
+
+        boolean active() {
+            return open.get() > 0;
+        }
+    }
 
     @Test
     void shouldCreateAuthorisedConsent() {
@@ -58,11 +90,13 @@ class RecurringPaymentServiceTest {
 
         VrpConsent consent = service.createConsent(new CreateVrpConsentCommand(
                 "TPP-001",
+                "CONS-AUTH-CREATE",
                 "PSU-001",
                 new BigDecimal("5000.00"),
                 "AED",
                 Instant.parse("2099-01-01T00:00:00Z"),
-                "ix-1"
+                "ix-1",
+                "ACC-DEFAULT"
         ));
 
         assertThat(consent.status()).isEqualTo(VrpConsentStatus.AUTHORISED);
@@ -210,14 +244,75 @@ class RecurringPaymentServiceTest {
     }
 
     @Test
+    void aRetryAfterTheMandateWasRevokedIsRefusedLikeTheMonolith() {
+        // Parity LP-08-U01: the monolith checks the mandate's own state before the
+        // idempotent replay, so a reused key after DELETE is 403 "Consent Revoked".
+        TestPaymentPort payments = new TestPaymentPort();
+        RecurringPaymentService service = service(new TestConsentPort(), payments, new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+        VrpConsent consent = createConsent(service);
+        SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-1", new BigDecimal("10.00"), "AED", "ix-7");
+        service.submitCollection(collection);
+
+        service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-7", "User request"));
+
+        assertThatThrownBy(() -> service.submitCollection(collection))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-REV-RETRY-2", new BigDecimal("10.00"), "AED", "ix-7")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
+        assertThat(payments.data).hasSize(1);
+    }
+
+    @Test
+    void aRetryAfterTheMandateExpiredIsRefusedLikeTheMonolith() {
+        TestConsentPort mandates = new TestConsentPort();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+        VrpConsent consent = createConsent(service);
+        SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-EXP-RETRY-1", new BigDecimal("10.00"), "AED", "ix-7");
+        service.submitCollection(collection);
+
+        VrpConsent stored = mandates.findById(consent.consentId()).orElseThrow();
+        mandates.save(new VrpConsent(stored.consentId(), stored.tppId(), stored.psuId(), new BigDecimal("5000.00"),
+                "AED", VrpConsentStatus.AUTHORISED, Instant.parse("2026-02-09T09:00:00Z"), null));
+
+        assertThatThrownBy(() -> service.submitCollection(collection))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent expired");
+    }
+
+    @Test
+    void aRetryAfterThePsuWithdrewTheConsentReturnsTheStoredResultWithoutAskingTheConsentService() {
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), new RecordingEventPublisher(), new TestDebtorAccountPort(), consents);
+        VrpConsent mandate = service.createConsent(command("CONS-AUTH-RETRY", null, "ACC-DEFAULT"));
+        SubmitVrpPaymentCommand collection = new SubmitVrpPaymentCommand(
+                "TPP-001", mandate.consentId(), "IDEMP-WD-RETRY-1", new BigDecimal("10.00"), "AED", "ix-8");
+        VrpCollectionResult accepted = service.submitCollection(collection);
+
+        consents.data.put(mandate.consentId(), new PsuConsent(mandate.consentId(), "TPP-001", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), false));
+        int lookupsBefore = consents.lookups.size();
+
+        assertThat(service.submitCollection(collection).paymentId()).isEqualTo(accepted.paymentId());
+        assertThat(consents.lookups).hasSize(lookupsBefore);
+    }
+
+    @Test
     void shouldServeConsentFromCacheAfterFirstLoad() {
         TestConsentPort consentPort = new TestConsentPort();
         TestCachePort cachePort = new TestCachePort();
         RecurringPaymentService service = service(consentPort, new TestPaymentPort(), new TestIdempotencyPort(), cachePort, new TestLockPort());
 
         VrpConsent consent = createConsent(service);
-        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7"))).isPresent();
-        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7"))).isPresent();
+        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7")).consentId())
+                .isEqualTo(consent.consentId());
+        assertThat(service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-001", "ix-7")).consentId())
+                .isEqualTo(consent.consentId());
 
         assertThat(cachePort.consentCache).isNotEmpty();
     }
@@ -249,11 +344,16 @@ class RecurringPaymentServiceTest {
     }
 
     @Test
-    void shouldReturnEmptyWhenConsentOrPaymentMissing() {
+    void unknownConsentOrPaymentIdIsA404() {
         RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(), new TestCachePort(), new TestLockPort());
 
-        assertThat(service.getConsent(new GetVrpConsentQuery("CONS-404", "TPP-001", "ix-8"))).isEmpty();
-        assertThat(service.getPayment(new GetVrpPaymentQuery("PAY-404", "TPP-001", "ix-8"))).isEmpty();
+        // An unknown path id is answered like another TPP's: one 404 per resource type (ADR-025 item 5).
+        assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery("CONS-404", "TPP-001", "ix-8")))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class).hasMessage("Consent not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND);
+        assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery("PAY-404", "TPP-001", "ix-8")))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException.class).hasMessage("Payment not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.NOT_FOUND);
     }
 
     @Test
@@ -270,12 +370,12 @@ class RecurringPaymentServiceTest {
         ));
 
         assertThatThrownBy(() -> service.getConsent(new GetVrpConsentQuery(consent.consentId(), "TPP-OTHER", "ix-9")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessageContaining("participant mismatch");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class).hasMessage("Consent not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.OTHER_TPP);
 
         assertThatThrownBy(() -> service.getPayment(new GetVrpPaymentQuery(result.paymentId(), "TPP-OTHER", "ix-9")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessageContaining("participant mismatch");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.PaymentNotFoundException.class).hasMessage("Payment not found")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException.Reason.OTHER_TPP);
     }
 
     @Test
@@ -284,12 +384,12 @@ class RecurringPaymentServiceTest {
         VrpConsent consent = createConsent(service);
 
         assertThatThrownBy(() -> service.revokeConsent(new RevokeVrpConsentCommand("CONS-404", "TPP-001", "ix-10", "missing")))
-                .isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("Consent not found");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class)
+                .hasMessage("Consent not found");
 
         assertThatThrownBy(() -> service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-OTHER", "ix-10", "forbidden")))
-                .isInstanceOf(ForbiddenException.class)
-                .hasMessageContaining("participant mismatch");
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotFoundException.class)
+                .hasMessage("Consent not found");
     }
 
     @Test
@@ -304,8 +404,8 @@ class RecurringPaymentServiceTest {
                 new BigDecimal("10.00"),
                 "AED",
                 "ix-11"
-        ))).isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("Consent not found");
+        ))).isInstanceOf(ForbiddenException.class)
+                .hasMessage("Consent not found or not authorised");
 
         VrpConsent expired = new VrpConsent(
                 "CONS-EXP-001",
@@ -367,6 +467,300 @@ class RecurringPaymentServiceTest {
                 .hasMessageContaining("Payment not found");
     }
 
+    @Test
+    void shouldPublishCreatedRevokedAndPaymentAcceptedEventsWithIncreasingMandateVersions() {
+        TestConsentPort consentPort = new TestConsentPort();
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(consentPort, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort());
+
+        VrpConsent consent = createConsent(service);
+        service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(), "IDEMP-EV-1",
+                new BigDecimal("1250.00"), "AED", "ix-ev"));
+        service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(), "IDEMP-EV-2",
+                new BigDecimal("750.00"), "AED", "ix-ev"));
+        service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-ev", "Customer request"));
+        service.revokeConsent(new RevokeVrpConsentCommand(consent.consentId(), "TPP-001", "ix-ev", "Again"));
+
+        assertThat(events.published).extracting(e -> e.getClass().getSimpleName()).containsExactly(
+                "MandateCreated", "MandatePaymentAccepted", "MandatePaymentAccepted", "MandateRevoked");
+        assertThat(events.published).extracting(MandateEvent::aggregateVersion).containsExactly(0L, 1L, 2L, 3L);
+        assertThat(((MandatePaymentAccepted) events.published.get(2)).periodTotal()).isEqualByComparingTo("2000.00");
+        assertThat(((MandateRevoked) events.published.get(3)).reason()).isEqualTo("Customer request");
+        assertThat(consentPort.data.get(consent.consentId()).version()).isEqualTo(3L);
+    }
+
+    @Test
+    void shouldNotPublishAnythingForAnIdempotentReplayOrARejectedPayment() {
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort());
+        VrpConsent consent = createConsent(service);
+        SubmitVrpPaymentCommand payment = new SubmitVrpPaymentCommand("TPP-001", consent.consentId(), "IDEMP-RP-1",
+                new BigDecimal("100.00"), "AED", "ix-rp");
+
+        service.submitCollection(payment);
+        service.submitCollection(payment);
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(),
+                "IDEMP-RP-2", new BigDecimal("4900.01"), "AED", "ix-rp")))
+                .isInstanceOf(BusinessRuleViolationException.class);
+
+        assertThat(events.published).hasSize(2);
+        assertThat(events.published.get(0)).isInstanceOf(MandateCreated.class);
+    }
+
+    @Test
+    void shouldVerifyTheDebtorAccountWhenTheMandateNamesOne() {
+        TestDebtorAccountPort accounts = new TestDebtorAccountPort();
+        accounts.accounts.put("ACC-ACTIVE", new DebtorAccount("ACC-ACTIVE", true, true, "AED"));
+        accounts.accounts.put("ACC-BLOCKED", new DebtorAccount("ACC-BLOCKED", false, true, "AED"));
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, accounts);
+
+        VrpConsent linked = service.createConsent(consentCommand("ACC-ACTIVE"));
+        assertThat(linked.debtorAccountId()).isEqualTo("ACC-ACTIVE");
+
+        assertThatThrownBy(() -> service.createConsent(consentCommand("ACC-UNKNOWN")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
+        assertThatThrownBy(() -> service.createConsent(consentCommand("ACC-BLOCKED")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
+
+        // The account is blocked after the mandate was set up: the next collection is refused.
+        accounts.accounts.put("ACC-ACTIVE", new DebtorAccount("ACC-ACTIVE", true, false, "AED"));
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", linked.consentId(),
+                "IDEMP-DA-1", new BigDecimal("10.00"), "AED", "ix-da")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
+        assertThat(events.published).hasSize(1);
+    }
+
+    @Test
+    void shouldRejectACollectionWhenTheMandateWasRevokedWhileWaitingForTheLock() {
+        TestConsentPort consentPort = new TestConsentPort();
+        RecurringPaymentService[] holder = new RecurringPaymentService[1];
+        VrpLockPort revokingLock = new VrpLockPort() {
+            @Override
+            public <T> T withConsentLock(String consentId, java.util.function.Supplier<T> operation) {
+                VrpConsent current = consentPort.data.get(consentId);
+                if (!current.isRevoked()) {
+                    consentPort.save(current.revoke(CLOCK.instant(), "Concurrent revoke").mandate());
+                }
+                return operation.get();
+            }
+        };
+        holder[0] = service(consentPort, new TestPaymentPort(), new TestIdempotencyPort(), new TestCachePort(), revokingLock);
+        VrpConsent consent = createConsent(holder[0]);
+
+        assertThatThrownBy(() -> holder[0].submitCollection(new SubmitVrpPaymentCommand("TPP-001", consent.consentId(),
+                "IDEMP-LOCK-1", new BigDecimal("10.00"), "AED", "ix-lock")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("Consent Revoked");
+    }
+
+    @Test
+    void theMandateIsTheConsentThePsuAuthorisedWithItsPsuAndDebtorAccount() {
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        consents.data.put("CONS-AUTH-PSU7", new PsuConsent("CONS-AUTH-PSU7", "TPP-001", "PSU-777",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-777"),
+                Instant.parse("2027-01-01T00:00:00Z"), true));
+        TestDebtorAccountPort accounts = new TestDebtorAccountPort();
+        accounts.accounts.put("ACC-777", new DebtorAccount("ACC-777", true, true, "AED"));
+        TestConsentPort mandates = new TestConsentPort();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), new RecordingEventPublisher(), accounts, consents);
+
+        VrpConsent mandate = service.createConsent(new CreateVrpConsentCommand("TPP-001", "CONS-AUTH-PSU7", null,
+                new BigDecimal("750.00"), "AED", null, "ix-bind", null));
+
+        assertThat(mandate.consentId()).isEqualTo("CONS-AUTH-PSU7");
+        assertThat(mandate.psuId()).isEqualTo("PSU-777");
+        assertThat(mandate.debtorAccountId()).isEqualTo("ACC-777");
+        assertThat(mandate.expiresAt()).isEqualTo(Instant.parse("2027-01-01T00:00:00Z"));
+        assertThat(mandates.data).containsOnlyKeys("CONS-AUTH-PSU7");
+    }
+
+    @Test
+    void noMandateWithoutAUsableConsentOfThisTppForThisPsu() {
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        consents.data.put("CONS-AUTH-PENDING", new PsuConsent("CONS-AUTH-PENDING", "TPP-001", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), false));
+        consents.data.put("CONS-AUTH-OTHER-TPP", new PsuConsent("CONS-AUTH-OTHER-TPP", "TPP-002", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), true));
+        TestConsentPort mandates = new TestConsentPort();
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort(), consents);
+
+        assertThatThrownBy(() -> service.createConsent(command("MISSING-1", null, null)))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.NOT_FOUND);
+        assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-PENDING", null, null)))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.NOT_AUTHORISED);
+        assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-OTHER-TPP", null, null)))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.OTHER_TPP);
+        assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-X", "PSU-SOMEONE-ELSE", "ACC-DEFAULT")))
+                .isInstanceOf(ForbiddenException.class).hasMessage("PsuId does not match the consent");
+        assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-Y", null, "ACC-NOT-IN-CONSENT")))
+                .isInstanceOf(BusinessRuleViolationException.class).hasMessage(DebtorAccount.NOT_USABLE);
+
+        assertThat(mandates.data).isEmpty();
+        assertThat(events.published).isEmpty();
+    }
+
+    @Test
+    void aTppCannotCreateAMandateUnderAnotherTppsRevokedOrExpiredConsent() {
+        // LP-08 / ADR-025: a consent id in a request body gets one uniform 403, whatever
+        // state the consent is in and whoever owns it.
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        consents.data.put("CONS-OTHER-REVOKED", new PsuConsent("CONS-OTHER-REVOKED", "TPP-002", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), false));
+        consents.data.put("CONS-OTHER-EXPIRED", new PsuConsent("CONS-OTHER-EXPIRED", "TPP-002", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2020-01-01T00:00:00Z"), true));
+        TestConsentPort mandates = new TestConsentPort();
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort(), consents);
+
+        for (String consentId : List.of("CONS-OTHER-REVOKED", "CONS-OTHER-EXPIRED", "MISSING-1")) {
+            assertThatThrownBy(() -> service.createConsent(command(consentId, null, null)))
+                    .isInstanceOf(ConsentNotUsableException.class)
+                    .hasMessage(ConsentNotUsableException.MESSAGE);
+        }
+        assertThat(mandates.data).isEmpty();
+        assertThat(events.published).isEmpty();
+    }
+
+    @Test
+    void aTppCannotCollectOnAnotherTppsRevokedOrExpiredMandateAndLearnsNothingAboutItsState() {
+        TestConsentPort mandates = new TestConsentPort();
+        TestPaymentPort payments = new TestPaymentPort();
+        RecurringPaymentService service = service(mandates, payments, new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+        VrpConsent revoked = createConsent(service);
+        service.revokeConsent(new RevokeVrpConsentCommand(revoked.consentId(), "TPP-001", "ix-8", "User request"));
+        VrpConsent expiring = createConsent(service);
+        mandates.save(new VrpConsent(expiring.consentId(), expiring.tppId(), expiring.psuId(), new BigDecimal("5000.00"),
+                "AED", VrpConsentStatus.AUTHORISED, Instant.parse("2026-02-09T09:00:00Z"), null));
+
+        // The owner is told the mandate's state ("Consent Revoked" / "Consent expired") ...
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", revoked.consentId(), "IDEMP-OWN-REV", new BigDecimal("10.00"), "AED", "ix-8")))
+                .hasMessage("Consent Revoked");
+        // ... another TPP gets the uniform refusal, the same as for an id that never existed.
+        for (String consentId : List.of(revoked.consentId(), expiring.consentId(), "MISSING-1")) {
+            assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand(
+                    "TPP-002", consentId, "IDEMP-OTHER-" + consentId, new BigDecimal("10.00"), "AED", "ix-8")))
+                    .isInstanceOf(ConsentNotUsableException.class)
+                    .hasMessage(ConsentNotUsableException.MESSAGE);
+        }
+        assertThat(payments.data).isEmpty();
+    }
+
+    @Test
+    void aConsentCarriesAtMostOneMandate() {
+        TestConsentPort mandates = new TestConsentPort();
+        RecurringPaymentService service = service(mandates, new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort());
+
+        service.createConsent(command("CONS-AUTH-ONCE", null, "ACC-DEFAULT"));
+        assertThatThrownBy(() -> service.createConsent(command("CONS-AUTH-ONCE", null, "ACC-DEFAULT")))
+                .isInstanceOf(MandateAlreadyExistsException.class);
+    }
+
+    @Test
+    void aCollectionIsRefusedOnceThePsuWithdrewTheConsent() {
+        TestPsuConsentPort consents = new TestPsuConsentPort();
+        TestPaymentPort payments = new TestPaymentPort();
+        RecordingEventPublisher events = new RecordingEventPublisher();
+        RecurringPaymentService service = service(new TestConsentPort(), payments, new TestIdempotencyPort(),
+                new TestCachePort(), new TestLockPort(), events, new TestDebtorAccountPort(), consents);
+        VrpConsent mandate = service.createConsent(command("CONS-AUTH-WITHDRAWN", null, "ACC-DEFAULT"));
+
+        consents.data.put(mandate.consentId(), new PsuConsent(mandate.consentId(), "TPP-001", "PSU-001",
+                java.util.Set.of(PsuConsent.VRP_SCOPE), java.util.Set.of("ACC-DEFAULT"),
+                Instant.parse("2099-01-01T00:00:00Z"), false));
+
+        assertThatThrownBy(() -> service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", mandate.consentId(),
+                "IDEMP-WD-1", new BigDecimal("10.00"), "AED", "ix-wd")))
+                .isInstanceOf(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.class).hasMessage("Consent not found or not authorised")
+                .extracting("reason").isEqualTo(com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException.Reason.NOT_AUTHORISED);
+        assertThat(events.published).hasSize(1);
+    }
+
+    private static CreateVrpConsentCommand command(String consentId, String psuId, String account) {
+        return new CreateVrpConsentCommand("TPP-001", consentId, psuId, new BigDecimal("5000.00"), "AED",
+                Instant.parse("2099-01-01T00:00:00Z"), "ix-cmd", account);
+    }
+
+    @Test
+    void remoteConsentAndAccountChecksRunBeforeAnyTransactionOrMandateLock() {
+        AtomicInteger locksHeld = new AtomicInteger();
+        List<Integer> locksHeldDuringRemoteCalls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        VrpLockPort countingLock = new VrpLockPort() {
+            @Override
+            public <T> T withConsentLock(String consentId, java.util.function.Supplier<T> operation) {
+                locksHeld.incrementAndGet();
+                try {
+                    return operation.get();
+                } finally {
+                    locksHeld.decrementAndGet();
+                }
+            }
+        };
+        List<Boolean> transactionOpenDuringRemoteCalls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        DebtorAccountPort accounts = accountId -> {
+            locksHeldDuringRemoteCalls.add(locksHeld.get());
+            transactionOpenDuringRemoteCalls.add(TRANSACTIONS.active());
+            return Optional.of(new DebtorAccount(accountId, true, true, "AED"));
+        };
+        PsuConsentPort consents = consentId -> {
+            locksHeldDuringRemoteCalls.add(locksHeld.get());
+            transactionOpenDuringRemoteCalls.add(TRANSACTIONS.active());
+            return new TestPsuConsentPort().findConsent(consentId);
+        };
+        RecurringPaymentService service = service(new TestConsentPort(), new TestPaymentPort(), new TestIdempotencyPort(),
+                new TestCachePort(), countingLock, new RecordingEventPublisher(), accounts, consents);
+
+        VrpConsent mandate = service.createConsent(consentCommand("ACC-ACTIVE"));
+        service.submitCollection(new SubmitVrpPaymentCommand("TPP-001", mandate.consentId(), "IDEMP-REMOTE-1",
+                new BigDecimal("10.00"), "AED", "ix-remote"));
+
+        // consent + account at creation, consent + account before the collection
+        assertThat(locksHeldDuringRemoteCalls).hasSize(4).containsOnly(0);
+        assertThat(transactionOpenDuringRemoteCalls).hasSize(4).containsOnly(false);
+    }
+
+    private static CreateVrpConsentCommand consentCommand(String debtorAccountId) {
+        return new CreateVrpConsentCommand("TPP-001", nextConsentId(), "PSU-001", new BigDecimal("5000.00"), "AED",
+                Instant.parse("2099-01-01T00:00:00Z"), "ix-create", debtorAccountId);
+    }
+
+    private static final class RecordingEventPublisher implements MandateEventPublisher {
+        private final List<MandateEvent> published = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(List<MandateEvent> events) {
+            published.addAll(events);
+        }
+    }
+
+    private static final class TestDebtorAccountPort implements DebtorAccountPort {
+        private final Map<String, DebtorAccount> accounts = new ConcurrentHashMap<>();
+
+        @Override
+        public Optional<DebtorAccount> findDebtorAccount(String accountId) {
+            if ("ACC-DEFAULT".equals(accountId) && !accounts.containsKey(accountId)) {
+                return Optional.of(new DebtorAccount(accountId, true, true, "AED"));
+            }
+            return Optional.ofNullable(accounts.get(accountId));
+        }
+    }
+
     private static Callable<Boolean> paymentTask(RecurringPaymentService service,
                                                  String consentId,
                                                  String idemKey,
@@ -392,14 +786,34 @@ class RecurringPaymentServiceTest {
     }
 
     private static VrpConsent createConsent(RecurringPaymentService service) {
-        return service.createConsent(new CreateVrpConsentCommand(
-                "TPP-001",
-                "PSU-001",
-                new BigDecimal("5000.00"),
-                "AED",
-                Instant.parse("2099-01-01T00:00:00Z"),
-                "ix-create"
-        ));
+        return service.createConsent(consentCommand("ACC-DEFAULT"));
+    }
+
+    private static final AtomicInteger CONSENT_IDS = new AtomicInteger();
+
+    private static String nextConsentId() {
+        return "CONS-AUTH-" + CONSENT_IDS.incrementAndGet();
+    }
+
+    /**
+     * Consent service stand-in: every consent id is a usable INITIATEVRP consent of
+     * TPP-001 / PSU-001 over the test accounts unless a test registers another one.
+     */
+    private static final class TestPsuConsentPort implements PsuConsentPort {
+        private final Map<String, PsuConsent> data = new ConcurrentHashMap<>();
+        private final List<String> lookups = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public Optional<PsuConsent> findConsent(String consentId) {
+            lookups.add(consentId);
+            if (consentId.startsWith("MISSING")) {
+                return Optional.empty();
+            }
+            return Optional.of(data.getOrDefault(consentId, new PsuConsent(consentId, "TPP-001", "PSU-001",
+                    java.util.Set.of(PsuConsent.VRP_SCOPE),
+                    java.util.Set.of("ACC-DEFAULT", "ACC-ACTIVE", "ACC-BLOCKED", "ACC-UNKNOWN"),
+                    Instant.parse("2099-01-01T00:00:00Z"), true)));
+        }
     }
 
     private static RecurringPaymentService service(
@@ -409,15 +823,68 @@ class RecurringPaymentServiceTest {
             VrpCachePort cachePort,
             VrpLockPort lockPort
     ) {
+        return service(consentPort, paymentPort, idempotencyPort, cachePort, lockPort,
+                new RecordingEventPublisher(), new TestDebtorAccountPort());
+    }
+
+    private static RecurringPaymentService service(
+            VrpConsentPort consentPort,
+            VrpPaymentPort paymentPort,
+            VrpIdempotencyPort idempotencyPort,
+            VrpCachePort cachePort,
+            VrpLockPort lockPort,
+            MandateEventPublisher eventPublisher,
+            DebtorAccountPort debtorAccountPort
+    ) {
+        return service(consentPort, paymentPort, idempotencyPort, cachePort, lockPort, eventPublisher,
+                debtorAccountPort, new TestPsuConsentPort());
+    }
+
+    private static RecurringPaymentService service(
+            VrpConsentPort consentPort,
+            VrpPaymentPort paymentPort,
+            VrpIdempotencyPort idempotencyPort,
+            VrpCachePort cachePort,
+            VrpLockPort lockPort,
+            MandateEventPublisher eventPublisher,
+            DebtorAccountPort debtorAccountPort,
+            PsuConsentPort psuConsentPort
+    ) {
         return new RecurringPaymentService(
                 consentPort,
                 paymentPort,
                 idempotencyPort,
                 cachePort,
                 lockPort,
+                eventPublisher,
+                debtorAccountPort,
+                psuConsentPort,
+                TRANSACTIONS,
                 new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30)),
                 CLOCK
         );
+    }
+
+    @Test
+    void theMonthlyLimitResetsAtMidnightInTheConfiguredZone() {
+        // 2026-02-28T20:30Z is already 1 March in Dubai: February's spend does not count.
+        Clock lateFebruaryUtc = Clock.fixed(Instant.parse("2026-02-28T20:30:00Z"), ZoneOffset.UTC);
+        TestPaymentPort paymentPort = new TestPaymentPort();
+        RecurringPaymentService dubai = new RecurringPaymentService(new TestConsentPort(), paymentPort,
+                new TestIdempotencyPort(), new TestCachePort(), new TestLockPort(), new RecordingEventPublisher(),
+                new TestDebtorAccountPort(), new TestPsuConsentPort(), TRANSACTIONS,
+                new VrpSettings(Duration.ofHours(24), Duration.ofSeconds(30), java.time.ZoneId.of("Asia/Dubai")),
+                lateFebruaryUtc);
+        VrpConsent consent = createConsent(dubai);
+        paymentPort.save(new VrpPayment("PAY-FEB", consent.consentId(), "TPP-001", "IDEMP-FEB",
+                new BigDecimal("5000.00"), "AED", "2026-02", VrpPaymentStatus.ACCEPTED,
+                Instant.parse("2026-02-27T10:00:00Z")));
+
+        VrpCollectionResult result = dubai.submitCollection(new SubmitVrpPaymentCommand(
+                "TPP-001", consent.consentId(), "IDEMP-MAR", new BigDecimal("100.00"), "AED", "ix-mar"));
+
+        assertThat(result.status()).isEqualTo(VrpPaymentStatus.ACCEPTED);
+        assertThat(paymentPort.findById(result.paymentId()).orElseThrow().periodKey()).isEqualTo("2026-03");
     }
 
     private static final class TestConsentPort implements VrpConsentPort {

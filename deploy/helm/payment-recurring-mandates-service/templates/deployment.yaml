@@ -1,0 +1,130 @@
+{{- /* Guardrail 4a: the vendored platform guard (fbx.guard) on every value route, before anything renders. */ -}}
+{{- include "mandates.guard" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mandates.name" . }}
+  labels:
+    {{- include "mandates.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount | int }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "mandates.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mandates.selectorLabels" . | nindent 8 }}
+        app: {{ include "mandates.name" . }}
+        version: {{ .Values.image.tag | toString | quote }}
+        {{- toYaml .Values.podLabels | nindent 8 }}
+      annotations:
+        sidecar.istio.io/inject: "true"
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.service.managementPort | quote }}
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name | quote }}
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.topologySpread.maxSkew | int }}
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              {{- include "mandates.selectorLabels" . | nindent 14 }}
+        - maxSkew: {{ .Values.topologySpread.maxSkew | int }}
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "mandates.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: payment-recurring-mandates-service
+          image: {{ printf "%s:%s" (required "image.repository is required" .Values.image.repository) (required "image.tag is required" .Values.image.tag) | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port | int }}
+            - name: management
+              containerPort: {{ .Values.service.managementPort | int }}
+          env:
+            # Migrations run only in the pre-install/pre-upgrade Job as the
+            # schema owner; the pods hold the runtime role and never migrate.
+            - name: SPRING_FLYWAY_ENABLED
+              value: "false"
+            # Platform convention: the RDS CA bundle path, for clients that take it separately from DB_URL.
+            - name: DB_SSL_ROOT_CERT
+              value: {{ printf "%s/%s" .Values.rdsCaBundle.mountPath .Values.rdsCaBundle.key | quote }}
+            {{- /* Kubernetes env wins over envFrom: extraEnv passed mandates.guard above (no DB_URL, no
+                 datasource, config, profile, TLS or Kafka name, JVM options literal and checked). */ -}}
+            {{- range .Values.extraEnv }}
+            {{- toYaml (list .) | nindent 12 }}
+            {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "mandates.name" . }}
+            {{- if .Values.externalSecret.enabled }}
+            - secretRef:
+                name: {{ include "mandates.secretName" . }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: rds-ca-bundle
+              mountPath: {{ .Values.rdsCaBundle.mountPath | quote }}
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: rds-ca-bundle
+          configMap:
+            name: {{ .Values.rdsCaBundle.configMapName | quote }}
+            items:
+              - key: {{ .Values.rdsCaBundle.key | quote }}
+                path: {{ .Values.rdsCaBundle.key | quote }}

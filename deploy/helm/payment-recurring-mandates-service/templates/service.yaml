@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mandates.name" . }}
+  labels:
+    {{- include "mandates.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "mandates.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port | int }}
+      targetPort: http
+    - name: http-management
+      port: {{ .Values.service.managementPort | int }}
+      targetPort: management

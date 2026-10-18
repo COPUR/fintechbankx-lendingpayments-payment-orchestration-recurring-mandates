@@ -18,3 +18,10 @@
 - Follow-up refactoring may be needed to remove residual cross-context coupling.
 - Build artifacts and local machine files are excluded by policy.
 
+
+## 2026-10-08: deployable service (Proposed)
+
+- Seeded open-finance residue outside `recurringpayments` removed; see README "Removed from this repository".
+- `infra/terraform/recurring-payments-service` replaced by `deploy/terraform`; Helm chart in `deploy/helm/payment-recurring-mandates-service`.
+- Own PostgreSQL schema `sc_pay_recurring_mandates` (Flyway V1, V2). The monolith held this capability in memory only, so there is no backfill and no data-split job.
+- Monolith-to-service behaviour differences: `docs/migration/REGRESSION_MAPPING.md`.

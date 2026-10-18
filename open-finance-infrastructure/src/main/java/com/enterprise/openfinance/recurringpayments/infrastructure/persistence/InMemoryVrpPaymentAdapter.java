@@ -2,14 +2,17 @@ package com.enterprise.openfinance.recurringpayments.infrastructure.persistence;
 
 import com.enterprise.openfinance.recurringpayments.domain.model.VrpPayment;
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpPaymentPort;
-import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
-@Repository
+/**
+ * Single-JVM adapter kept for unit tests and as a reference; not a Spring bean.
+ * The service uses the PostgreSQL adapters so state survives restarts and is
+ * shared across replicas.
+ */
 public class InMemoryVrpPaymentAdapter implements VrpPaymentPort {
 
     private final Map<String, VrpPayment> data = new ConcurrentHashMap<>();

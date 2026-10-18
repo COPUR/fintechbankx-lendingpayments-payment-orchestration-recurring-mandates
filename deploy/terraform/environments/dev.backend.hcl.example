@@ -1,0 +1,5 @@
+bucket         = "fintechbankx-terraform-state-dev"
+key            = "payments/payment-recurring-mandates-service/terraform.tfstate"
+region         = "me-central-1"
+dynamodb_table = "fintechbankx-terraform-locks"
+encrypt        = true

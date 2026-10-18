@@ -1,14 +1,17 @@
 package com.enterprise.openfinance.recurringpayments.infrastructure.locking;
 
 import com.enterprise.openfinance.recurringpayments.domain.port.out.VrpLockPort;
-import org.springframework.stereotype.Component;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
-@Component
+/**
+ * Single-JVM adapter kept for unit tests and as a reference; not a Spring bean.
+ * The service uses the PostgreSQL adapters so state survives restarts and is
+ * shared across replicas.
+ */
 public class InMemoryVrpLockAdapter implements VrpLockPort {
 
     private final Map<String, ReentrantLock> locks = new ConcurrentHashMap<>();

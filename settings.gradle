@@ -1,5 +1,14 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        // The Spring Boot plugin's own dependencies are only on Maven Central.
+        mavenCentral()
+    }
+}
+
 rootProject.name = 'fintechbankx-payments-recurring-mandates-service'
 
 include 'open-finance-domain'
 include 'open-finance-application'
 include 'open-finance-infrastructure'
+include 'open-finance-bootstrap'

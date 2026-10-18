@@ -1,12 +1,25 @@
 package com.enterprise.openfinance.recurringpayments.infrastructure.rest;
 
 import com.enterprise.openfinance.recurringpayments.domain.exception.BusinessRuleViolationException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.ConsentNotUsableException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ForbiddenException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.IdempotencyConflictException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.CallerScopedNotFoundException;
 import com.enterprise.openfinance.recurringpayments.domain.exception.ResourceNotFoundException;
 import com.enterprise.openfinance.recurringpayments.infrastructure.rest.dto.VrpErrorResponse;
+import com.enterprise.openfinance.recurringpayments.domain.exception.MandateVersionConflictException;
+import com.enterprise.openfinance.recurringpayments.domain.exception.MandateAlreadyExistsException;
+import com.enterprise.openfinance.recurringpayments.infrastructure.external.ConsentServiceUnavailableException;
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import java.time.Clock;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.ErrorResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -14,46 +27,136 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @RestControllerAdvice(basePackages = "com.enterprise.openfinance.recurringpayments.infrastructure.rest")
 public class RecurringPaymentExceptionHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(RecurringPaymentExceptionHandler.class);
+
+    private final Clock clock;
+
+    /** The application's Clock stamps every error body, so equal refusals have equal bodies. */
+    public RecurringPaymentExceptionHandler(Clock clock) {
+        this.clock = clock;
+    }
+
+    private VrpErrorResponse error(String code, String message, String interactionId) {
+        return new VrpErrorResponse(code, message, interactionId, clock.instant());
+    }
+
+    /**
+     * One body for every consent the caller may not use; the reason goes to the
+     * log only, with the interaction id so support can trace a TPP's complaint.
+     */
+    @ExceptionHandler(ConsentNotUsableException.class)
+    public ResponseEntity<VrpErrorResponse> handleConsentNotUsable(ConsentNotUsableException exception,
+                                                                   HttpServletRequest request) {
+        String interactionId = interactionId(request);
+        log.info("Consent refused: reason={} interactionId={}", exception.reason(), interactionId);
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(error("FORBIDDEN", ConsentNotUsableException.MESSAGE, interactionId));
+    }
+
+    /**
+     * ADR-025 item 5: an unknown path id and another TPP's get one 404 with the
+     * resource type's fixed message; the reason goes to the log only.
+     */
+    @ExceptionHandler(CallerScopedNotFoundException.class)
+    public ResponseEntity<VrpErrorResponse> handleCallerScopedNotFound(CallerScopedNotFoundException exception,
+                                                                       HttpServletRequest request) {
+        String interactionId = interactionId(request);
+        log.info("{}: reason={} interactionId={}", exception.getMessage(), exception.reason(), interactionId);
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(error("NOT_FOUND", exception.getMessage(), interactionId));
+    }
+
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<VrpErrorResponse> handleForbidden(ForbiddenException exception,
                                                             HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(VrpErrorResponse.of("FORBIDDEN", exception.getMessage(), interactionId(request)));
+                .body(error("FORBIDDEN", exception.getMessage(), interactionId(request)));
     }
 
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<VrpErrorResponse> handleNotFound(ResourceNotFoundException exception,
                                                            HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(VrpErrorResponse.of("NOT_FOUND", exception.getMessage(), interactionId(request)));
+                .body(error("NOT_FOUND", exception.getMessage(), interactionId(request)));
     }
 
     @ExceptionHandler(IdempotencyConflictException.class)
     public ResponseEntity<VrpErrorResponse> handleConflict(IdempotencyConflictException exception,
                                                            HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(VrpErrorResponse.of("CONFLICT", exception.getMessage(), interactionId(request)));
+                .body(error("CONFLICT", exception.getMessage(), interactionId(request)));
+    }
+
+    @ExceptionHandler(MandateVersionConflictException.class)
+    public ResponseEntity<VrpErrorResponse> handleConcurrentUpdate(MandateVersionConflictException exception,
+                                                                   HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(error("CONCURRENT_UPDATE", "Mandate was changed concurrently; retry",
+                        interactionId(request)));
+    }
+
+    /** The accounts service could not be reached or failed: refuse, never assume the account is fine. */
+    @ExceptionHandler(MandateAlreadyExistsException.class)
+    public ResponseEntity<VrpErrorResponse> handleMandateExists(MandateAlreadyExistsException exception,
+                                                                HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(error("MANDATE_EXISTS", exception.getMessage(), interactionId(request)));
+    }
+
+    @ExceptionHandler(ConsentServiceUnavailableException.class)
+    public ResponseEntity<VrpErrorResponse> handleConsentServiceDown(ConsentServiceUnavailableException exception,
+                                                                     HttpServletRequest request) {
+        log.warn("Consent service unavailable: {}", exception.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(error("DEPENDENCY_UNAVAILABLE", "Consent check is unavailable; retry later",
+                        interactionId(request)));
+    }
+
+    @ExceptionHandler(RestClientException.class)
+    public ResponseEntity<VrpErrorResponse> handleDependencyFailure(RestClientException exception,
+                                                                    HttpServletRequest request) {
+        log.warn("Accounts service call failed: {}", exception.getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(error("DEPENDENCY_UNAVAILABLE", "Debtor account check is unavailable; retry later",
+                        interactionId(request)));
+    }
+
+    @ExceptionHandler({ServletRequestBindingException.class, HttpMessageNotReadableException.class,
+            MethodArgumentTypeMismatchException.class})
+    public ResponseEntity<VrpErrorResponse> handleMalformedRequest(Exception exception,
+                                                                   HttpServletRequest request) {
+        return ResponseEntity.badRequest()
+                .body(error("INVALID_REQUEST", "Malformed request: missing or invalid header, parameter or body",
+                        interactionId(request)));
     }
 
     @ExceptionHandler(BusinessRuleViolationException.class)
     public ResponseEntity<VrpErrorResponse> handleBusinessRule(BusinessRuleViolationException exception,
                                                                HttpServletRequest request) {
         return ResponseEntity.badRequest()
-                .body(VrpErrorResponse.of("BUSINESS_RULE_VIOLATION", exception.getMessage(), interactionId(request)));
+                .body(error("BUSINESS_RULE_VIOLATION", exception.getMessage(), interactionId(request)));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<VrpErrorResponse> handleBadRequest(IllegalArgumentException exception,
                                                              HttpServletRequest request) {
         return ResponseEntity.badRequest()
-                .body(VrpErrorResponse.of("INVALID_REQUEST", exception.getMessage(), interactionId(request)));
+                .body(error("INVALID_REQUEST", exception.getMessage(), interactionId(request)));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<VrpErrorResponse> handleUnexpected(Exception exception,
                                                              HttpServletRequest request) {
+        // Spring MVC client errors (405, 415, 404 for unknown paths, ...) keep their status.
+        if (exception instanceof ErrorResponse errorResponse && errorResponse.getStatusCode().is4xxClientError()) {
+            int status = errorResponse.getStatusCode().value();
+            String code = status == HttpStatus.NOT_FOUND.value() ? "NOT_FOUND" : "INVALID_REQUEST";
+            return ResponseEntity.status(status)
+                    .body(error(code, errorResponse.getBody().getDetail(), interactionId(request)));
+        }
+        log.error("Unexpected error", exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(VrpErrorResponse.of("INTERNAL_ERROR", "Unexpected error occurred", interactionId(request)));
+                .body(error("INTERNAL_ERROR", "Unexpected error occurred", interactionId(request)));
     }
 
     private static String interactionId(HttpServletRequest request) {

@@ -1,0 +1,19 @@
+# Dev: smaller footprint, still two replicas so rollouts and PDBs are exercised.
+replicaCount: 2
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 4
+podDisruptionBudget:
+  minAvailable: 1
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    memory: 768Mi
+topologySpread:
+  maxSkew: 2
+
+# The accounts ledger in the cluster (ADR-030, svc-acc-accounts-ledger).
+config:
+  ACCOUNTS_SERVICE_BASE_URL: http://accounts-ledger-service.corebanking.svc.cluster.local:8080
